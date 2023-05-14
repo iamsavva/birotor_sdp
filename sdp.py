@@ -199,6 +199,8 @@ def _collect_bounding_box_constraints(
 def create_sdp_relaxation(
     prog: MathematicalProgram, use_linear_relaxation: bool = False, 
     multiply_equality_constraints:bool =  True,
+    sample_random_equality_constraints = False,
+    sample_percentage = 0.1
 ):
     
     DEGREE_QUADRATIC = 2  # We are only relaxing (non-convex) quadratic programs
@@ -256,9 +258,19 @@ def create_sdp_relaxation(
             num_cons = num_vars
         else:
             num_cons = 1
+        
             
 
+        np.random.seed(1)
         for a in A_eq:
+            if sample_random_equality_constraints:
+                num_cons = 1
+                options = np.random.choice(num_vars, int(num_vars*sample_percentage))
+                for i in options:
+                    j += 1
+                    A = np.outer(a, I[i])
+                    relaxed_prog.AddLinearConstraint( np.sum( X * ( A + A.T ) ) == 0 )
+
             for i in range(num_cons):
                 j += 1
                 A = np.outer(a, I[i])
