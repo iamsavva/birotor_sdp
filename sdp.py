@@ -88,13 +88,14 @@ def _generic_constraint_binding_to_polynomials(
     binding: Binding,
 ):
     # TODO replace with QuadraticConstraint
+
     poly = sym.Polynomial(binding.evaluator().Eval(binding.variables())[0])
     b_upper = binding.evaluator().upper_bound()
     b_lower = binding.evaluator().lower_bound()
 
     polys = []
     for b_u, b_l in zip(b_upper, b_lower):
-        if b_u == b_u:  # eq constraint
+        if b_l == b_u:  # eq constraint
             polys.append((b_u - poly, ConstraintType.EQ))
         else:
             if not np.isinf(b_l):
@@ -196,12 +197,12 @@ def _collect_bounding_box_constraints(
 
 
 def create_sdp_relaxation(
-    prog: MathematicalProgram, use_linear_relaxation: bool = False
+    prog: MathematicalProgram, use_linear_relaxation: bool = False, 
+    multiply_equality_constraints:bool =  True,
 ):
     
     DEGREE_QUADRATIC = 2  # We are only relaxing (non-convex) quadratic programs
 
-    print("making decision vars")
     decision_vars = np.array(
         sorted(prog.decision_variables(), key=lambda x: x.get_id())
     )
@@ -219,7 +220,6 @@ def create_sdp_relaxation(
 
     # First variable is 1
     relaxed_prog.AddLinearConstraint(X[0, 0] == 1)  
-    print("colleciting bounding box constraints")
     bounding_box_eqs, bounding_box_ineqs = _collect_bounding_box_constraints(
         prog.bounding_box_constraints()
     )
@@ -228,7 +228,6 @@ def create_sdp_relaxation(
     if has_linear_costs:
         raise NotImplementedError("Linear costs not yet implemented!")
 
-    print("adding quadratic costs:", len(prog.quadratic_costs()))
     has_quadratic_costs = len(prog.quadratic_costs()) > 0
     if has_quadratic_costs:
         quadratic_costs = prog.quadratic_costs()
@@ -236,6 +235,7 @@ def create_sdp_relaxation(
             _quadratic_cost_binding_to_homogenuous_form(c, basis, num_vars)
             for c in quadratic_costs
         ]
+        print("adding quadratic costs:", len(Q_cost))
         for Q in Q_cost:
             c = np.trace(Q.dot(X))
             relaxed_prog.AddCost(c)
@@ -243,23 +243,28 @@ def create_sdp_relaxation(
     has_linear_eq_constraints = (
         len(prog.linear_equality_constraints()) > 0 or len(bounding_box_eqs) > 0
     )
-    print("adding linear equality constraints:", len(prog.linear_equality_constraints()) + len(bounding_box_eqs))
     A_eq = None
     if has_linear_eq_constraints:
         A_eq = _linear_bindings_to_homogenuous_form(
             prog.linear_equality_constraints(), bounding_box_eqs, decision_vars
         )
-        # multiplied_constraints = eq(( A_eq @ X @ A_eq.T ).flatten(), 0)
-        multiplied_constraints = eq(( A_eq.dot(X) ).flatten(), 0)
-        for c in multiplied_constraints:
-            relaxed_prog.AddLinearConstraint(c)
+        m,_ = A_eq.shape
+        print("adding linear equality constraints:", m)
+        I = np.eye(num_vars)
+        j = 0
+        if multiply_equality_constraints:
+            num_cons = num_vars
+        else:
+            num_cons = 1
+            
 
-        e_1 = unit_vector(0, X.shape[0])
-        linear_constraints = eq(A_eq.dot(X).dot(e_1), 0)
-        for c in linear_constraints:
-            relaxed_prog.AddLinearConstraint(c)
+        for a in A_eq:
+            for i in range(num_cons):
+                j += 1
+                A = np.outer(a, I[i])
+                relaxed_prog.AddLinearConstraint( np.sum( X * ( A + A.T ) ) == 0 )
+        print("added ", j, "linear equality constraints")
 
-    print("adding linear inequality constraints:", len(prog.linear_constraints())+len(bounding_box_ineqs))
     has_linear_ineq_constraints = (
         len(prog.linear_constraints()) > 0 or len(bounding_box_ineqs) > 0
     )
@@ -268,6 +273,9 @@ def create_sdp_relaxation(
         A_ineq = _linear_bindings_to_homogenuous_form(
             prog.linear_constraints(), bounding_box_ineqs, decision_vars
         )
+        m,_ = A_ineq.shape
+        print("adding linear inequality constraints:", m)
+
         multiplied_constraints = ge(A_ineq.dot(X).dot(A_ineq.T), 0)
         for c in multiplied_constraints.flatten():
             relaxed_prog.AddLinearConstraint(c)
@@ -277,30 +285,15 @@ def create_sdp_relaxation(
         for c in linear_constraints:
             relaxed_prog.AddLinearConstraint(c)
 
-    # Multiply equality and inequality constraints together.
-    # In theory, this should help, but it doesn't seem to make a
-    # difference. Commented out for now as it is very slow, and
-    # I will not need it once I implement null-space projections
-
-    # if A_ineq is not None and A_eq is not None:
-    #     for a_i in A_ineq:
-    #         for a_j in A_eq:
-    #             outer_product = np.outer(a_j, a_i)
-    #             c = np.trace(outer_product.dot(X))
-    #             relaxed_prog.AddLinearConstraint(c == 0)
-
-    print("adding generic constraints:", len(prog.generic_constraints()))
-
     has_generic_constaints = len(prog.generic_constraints()) > 0
     # TODO: I can use Hongkai's PR once that is merged
     if has_generic_constaints:
-        print("      _generic_constraint_bindings_to_polynomials")
         (
             generic_eq_constraints_as_polynomials,
             generic_ineq_constraints_as_polynomials,
         ) = _generic_constraint_bindings_to_polynomials(prog.generic_constraints())
-        print("      concatenate")
 
+        # check degree of all generic constraints
         generic_constraints_as_polynomials = np.concatenate(
             (
                 generic_eq_constraints_as_polynomials.flatten(),
@@ -308,25 +301,23 @@ def create_sdp_relaxation(
             )
         )
         _assert_max_degree(generic_constraints_as_polynomials, DEGREE_QUADRATIC)
-        print("      _quadratic_polynomial_to_homoenuous_form")
 
         Q_eqs = [
             _quadratic_polynomial_to_homoenuous_form(p, basis, num_vars)
             for p in generic_eq_constraints_as_polynomials
         ]
-        print("      q-eqs")
+        print("Quadratic equality constraints", len(Q_eqs))
         for Q in Q_eqs:
-            constraints = eq(np.trace(X.dot(Q)), 0).flatten()
-            # print("ues")
+            constraints = eq( np.sum(X * Q), 0).flatten()
             for c in constraints:  # Drake requires us to add one constraint at the time
                 relaxed_prog.AddLinearConstraint(c)
-        print("      q-ineqs")
         Q_ineqs = [
             _quadratic_polynomial_to_homoenuous_form(p, basis, num_vars)
             for p in generic_ineq_constraints_as_polynomials
         ]
+        print("Quadratic inequality constraints", len(Q_ineqs))
         for Q in Q_ineqs:
-            constraints = ge(np.trace(X.dot(Q)), 0).flatten()
+            constraints = ge(np.sum(X * Q), 0).flatten()
             for c in constraints:  # Drake requires us to add one constraint at the time
                 relaxed_prog.AddLinearConstraint(c)
 
