@@ -14,7 +14,7 @@ from pydrake.solvers import (
 )
 
 from utilities import unit_vector
-
+from tqdm import tqdm
 
 
 class BoundType(Enum):
@@ -238,7 +238,7 @@ def create_sdp_relaxation(
             for c in quadratic_costs
         ]
         print("adding quadratic costs:", len(Q_cost))
-        for Q in Q_cost:
+        for Q in tqdm(Q_cost):
             c = np.trace(Q.dot(X))
             relaxed_prog.AddCost(c)
 
@@ -258,11 +258,9 @@ def create_sdp_relaxation(
             num_cons = num_vars
         else:
             num_cons = 1
-        
-            
 
         np.random.seed(1)
-        for a in A_eq:
+        for a in tqdm(A_eq):
             if sample_random_equality_constraints:
                 num_cons = 1
                 options = np.random.choice(num_vars, int(num_vars*sample_percentage))
@@ -289,12 +287,12 @@ def create_sdp_relaxation(
         print("adding linear inequality constraints:", m)
 
         multiplied_constraints = ge(A_ineq.dot(X).dot(A_ineq.T), 0)
-        for c in multiplied_constraints.flatten():
+        for c in tqdm(multiplied_constraints.flatten()):
             relaxed_prog.AddLinearConstraint(c)
 
         e_1 = unit_vector(0, X.shape[0])
         linear_constraints = ge(A_ineq.dot(X).dot(e_1), 0)
-        for c in linear_constraints:
+        for c in tqdm(linear_constraints):
             relaxed_prog.AddLinearConstraint(c)
 
     has_generic_constaints = len(prog.generic_constraints()) > 0
@@ -319,7 +317,7 @@ def create_sdp_relaxation(
             for p in generic_eq_constraints_as_polynomials
         ]
         print("Quadratic equality constraints", len(Q_eqs))
-        for Q in Q_eqs:
+        for Q in tqdm(Q_eqs):
             constraints = eq( np.sum(X * Q), 0).flatten()
             for c in constraints:  # Drake requires us to add one constraint at the time
                 relaxed_prog.AddLinearConstraint(c)
@@ -328,7 +326,7 @@ def create_sdp_relaxation(
             for p in generic_ineq_constraints_as_polynomials
         ]
         print("Quadratic inequality constraints", len(Q_ineqs))
-        for Q in Q_ineqs:
+        for Q in tqdm(Q_ineqs):
             constraints = ge(np.sum(X * Q), 0).flatten()
             for c in constraints:  # Drake requires us to add one constraint at the time
                 relaxed_prog.AddLinearConstraint(c)
