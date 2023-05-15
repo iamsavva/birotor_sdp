@@ -38,11 +38,9 @@ from underactuated.quadrotor2d import Quadrotor2D, Quadrotor2DVisualizer
 
 from nonlinear_birotor import make_a_nonconvex_birotor_program
 
-
-builder = DiagramBuilder()
-plant = builder.AddSystem(Quadrotor2D())
-
 def get_solution_from_X(N, X, verbose = False):
+    builder = DiagramBuilder()
+    plant = builder.AddSystem(Quadrotor2D())
     x_vec = np.real(_get_sol_from_svd(X))[1:]
     res = dict()
     N1 = N
@@ -68,7 +66,6 @@ def get_solution_from_X(N, X, verbose = False):
 
     INFO("ddy", (res["v"] + res["w"]) * res["c"] / plant.mass - plant.gravity)
     return res
-
 
 def solve_sdp_birotor(N:int, desired_pos:npt.NDArray = np.array([2,0]), dt:float = 0.2, multiply_equality_constraints = False):
     prog = make_a_nonconvex_birotor_program(N, desired_pos, dt, True)
