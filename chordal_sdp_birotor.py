@@ -8,7 +8,6 @@ from matplotlib import pyplot as plt
 import matplotlib.patches as patches
 
 import pydrake.symbolic as sym
-from utilities import unit_vector
 
 from pydrake.solvers import (
     MathematicalProgram,
@@ -19,17 +18,12 @@ from pydrake.solvers import (
     IpoptSolver,
     GurobiSolver
 )
-from pydrake.symbolic import Polynomial, Variable, Variables, Evaluate
-from sdp import create_sdp_relaxation, _get_sol_from_svd
 
 from pydrake.math import eq, le, ge
 
 from util import timeit, YAY, WARN, INFO, ERROR
 
-import math
-
 import matplotlib.pyplot as plt
-import mpld3
 import numpy as np
 from IPython.display import HTML, display
 from pydrake.all import  DiagramBuilder 
@@ -39,122 +33,15 @@ from pydrake.solvers import MathematicalProgram, Solve
 from underactuated import running_as_notebook
 from underactuated.quadrotor2d import Quadrotor2D, Quadrotor2DVisualizer
 
+from utilities import unit_vector
 from nonlinear_birotor import make_a_nonconvex_birotor_program
-
 from sdp_birotor import get_solution_from_X, solve_sdp_birotor
-
 from sdp import (
     _collect_bounding_box_constraints, _quadratic_cost_binding_to_homogenuous_form, _quadratic_cost_binding_to_homogenuous_form, _linear_bindings_to_homogenuous_form,
     _generic_constraint_bindings_to_polynomials, _assert_max_degree, _construct_symmetric_matrix_from_triang, _generic_constraint_binding_to_polynomials,
     _get_monomial_coeffs, _get_sol_from_svd, _linear_binding_to_expressions, _quadratic_polynomial_to_homoenuous_form, 
-    _generic_constraint_bindings_to_polynomials,
+    _generic_constraint_bindings_to_polynomials, add_constraints_to_psd_mat_from_prog
 )
-
-def add_constraints_to_psd_mat_from_prog(prog:MathematicalProgram, relaxed_prog:MathematicalProgram, X:npt.NDArray, multiply_equality_constraints:bool):
-    DEGREE_QUADRATIC = 2  # We are only relaxing (non-convex) quadratic programs
-    
-    decision_vars = np.array( sorted(prog.decision_variables(), key=lambda x: x.get_id()) )
-    num_vars = ( len(decision_vars) + 1 )
-    assert X.shape == (num_vars, num_vars) # else something is off
-
-    basis = np.flip(sym.MonomialBasis(decision_vars, DEGREE_QUADRATIC))
-    
-    bounding_box_eqs, bounding_box_ineqs = _collect_bounding_box_constraints(
-        prog.bounding_box_constraints()
-    )
-
-    has_linear_costs = len(prog.linear_costs()) > 0
-    if has_linear_costs:
-        raise NotImplementedError("Linear costs not yet implemented!")
-
-    has_quadratic_costs = len(prog.quadratic_costs()) > 0
-    if has_quadratic_costs:
-        quadratic_costs = prog.quadratic_costs()
-        Q_cost = [
-            _quadratic_cost_binding_to_homogenuous_form(c, basis, num_vars)
-            for c in quadratic_costs
-        ]
-        for Q in Q_cost:
-            c = np.trace(Q.dot(X))
-            relaxed_prog.AddCost(c)
-
-    has_linear_eq_constraints = (
-        len(prog.linear_equality_constraints()) > 0 or len(bounding_box_eqs) > 0
-    )
-    A_eq = None
-    if has_linear_eq_constraints:
-        A_eq = _linear_bindings_to_homogenuous_form(
-            prog.linear_equality_constraints(), bounding_box_eqs, decision_vars
-        )
-        m,_ = A_eq.shape
-        I = np.eye(num_vars)
-        j = 0
-        if multiply_equality_constraints:
-            num_cons = num_vars
-        else:
-            num_cons = 1
-
-        np.random.seed(1)
-        for a in A_eq:
-            for i in range(num_cons):
-                j += 1
-                A = np.outer(a, I[i])
-                relaxed_prog.AddLinearConstraint( np.sum( X * ( A + A.T ) ) == 0 )
-
-    has_linear_ineq_constraints = (
-        len(prog.linear_constraints()) > 0 or len(bounding_box_ineqs) > 0
-    )
-    A_ineq = None
-    if has_linear_ineq_constraints:
-        A_ineq = _linear_bindings_to_homogenuous_form(
-            prog.linear_constraints(), bounding_box_ineqs, decision_vars
-        )
-        m,_ = A_ineq.shape
-
-        multiplied_constraints = ge(A_ineq.dot(X).dot(A_ineq.T), 0)
-        for c in multiplied_constraints.flatten():
-            relaxed_prog.AddLinearConstraint(c)
-
-        e_1 = unit_vector(0, X.shape[0])
-        linear_constraints = ge(A_ineq.dot(X).dot(e_1), 0)
-        for c in linear_constraints:
-            relaxed_prog.AddLinearConstraint(c)
-
-    has_generic_constaints = len(prog.generic_constraints()) > 0
-    # TODO: I can use Hongkai's PR once that is merged
-    if has_generic_constaints:
-        (
-            generic_eq_constraints_as_polynomials,
-            generic_ineq_constraints_as_polynomials,
-        ) = _generic_constraint_bindings_to_polynomials(prog.generic_constraints())
-
-        # check degree of all generic constraints
-        generic_constraints_as_polynomials = np.concatenate(
-            (
-                generic_eq_constraints_as_polynomials.flatten(),
-                generic_ineq_constraints_as_polynomials.flatten(),
-            )
-        )
-        _assert_max_degree(generic_constraints_as_polynomials, DEGREE_QUADRATIC)
-
-        Q_eqs = [
-            _quadratic_polynomial_to_homoenuous_form(p, basis, num_vars)
-            for p in generic_eq_constraints_as_polynomials
-        ]
-        for Q in Q_eqs:
-            constraints = eq( np.sum(X * Q), 0).flatten()
-            for c in constraints:  # Drake requires us to add one constraint at the time
-                relaxed_prog.AddLinearConstraint(c)
-        Q_ineqs = [
-            _quadratic_polynomial_to_homoenuous_form(p, basis, num_vars)
-            for p in generic_ineq_constraints_as_polynomials
-        ]
-        for Q in Q_ineqs:
-            constraints = ge(np.sum(X * Q), 0).flatten()
-            for c in constraints:  # Drake requires us to add one constraint at the time
-                relaxed_prog.AddLinearConstraint(c)
-    # return relaxed_prog, X, basis
-
 
 def make_chordal_sdp_relaxation(N:int, state_dim:int, control_dim:int, prog: MathematicalProgram, boundary_conditions:T.Tuple[npt.NDArray, npt.NDArray, npt.NDArray], multiply_equality_constraints:bool = True):
     # ----------------------------------------------------------------------
@@ -260,13 +147,6 @@ def make_chordal_sdp_relaxation(N:int, state_dim:int, control_dim:int, prog: Mat
     final_cost = np.vstack((cost_row1, cost_row2))
                           
     relaxed_prog.AddLinearCost( np.sum( final_mat * final_cost ) )
-    # relaxed_prog.AddLinearConstraint(zn[N][0][0] == 2.0)
-    # relaxed_prog.AddLinearConstraint(zn[N][1][0] == 0.0)
-    # relaxed_prog.AddLinearConstraint(zn[N][2][0] == 0.0)
-
-    # relaxed_prog.AddLinearConstraint(zn[N][3][0] == 0.0)
-    # relaxed_prog.AddLinearConstraint(zn[N][4][0] == 0.0)
-    # relaxed_prog.AddLinearConstraint(zn[N][5][0] == 0.0)
 
     return relaxed_prog, zn, un, psd_mats
 
@@ -318,7 +198,8 @@ def make_chordal_sdp_program(N, desired_pos = np.array([2,0]), dt = 0.2):
     horizon = N
     builder = DiagramBuilder()
     plant = builder.AddSystem(Quadrotor2D())
-    thrust_2_mass_ratio = 3 # 3:1 thrust : mass ratio
+    # define constants
+    # thrust_2_mass_ratio = 3 # 3:1 thrust : mass ratio
     r = plant.length
     m = plant.mass
     I = plant.inertia
@@ -327,8 +208,8 @@ def make_chordal_sdp_program(N, desired_pos = np.array([2,0]), dt = 0.2):
     Q = np.diag([10, 10, 10,  1, 1, 20,   1, 1,1,1 ])
     Qf = Q
     R = np.array([[0.1, 0.05], [0.05, 0.1]])
-    # R = np.array([[1, 0.5], [0.5, 1]])
 
+    # order in which we define the variables matters -- hence the odd repetition.
     # the logic behind N = 1 is to make chordal matrix gen easier
     N = 1
     prog = MathematicalProgram()
@@ -345,7 +226,7 @@ def make_chordal_sdp_program(N, desired_pos = np.array([2,0]), dt = 0.2):
     # N timesteps for control inputs
     v = prog.NewContinuousVariables(1, "v_n")
     w = prog.NewContinuousVariables(1, "w_n")
-
+    # N+1 staet
     x = np.hstack( (x, prog.NewContinuousVariables(1, "x_n1")))
     y = np.hstack( (y, prog.NewContinuousVariables(1, "y_n1") ))
     th = np.hstack( (th, prog.NewContinuousVariables(1, "th_n1") ))
@@ -356,54 +237,41 @@ def make_chordal_sdp_program(N, desired_pos = np.array([2,0]), dt = 0.2):
     s = np.hstack( (s, prog.NewContinuousVariables(1, "s_n1") ))
     dc = np.hstack( (dc, prog.NewContinuousVariables(1, "dc_n1") ))
     ds =np.hstack( (ds,  prog.NewContinuousVariables(1, "ds_n1") ))
-
     # full state and control vectors
     z = np.vstack( (x,y,th,dx,dy,dth,c,s,dc,ds)).T
     u = np.vstack( (v,w) ).T
-
+    # dimensions
     state_dim = 10
     control_dim = 2
 
-    # let's stack all binding per step at respective parts
-    
-    for n in range(N):
-        # quadratic inequality constraints: s^2 + c^2 = 1
-        prog.AddConstraint( s[n+1]*ds[n+1] + c[n+1]*dc[n+1] == 0)
-        prog.AddConstraint( c[n+1] <= 1)
-        # prog.AddConstraint( c[n+1] <= 1)
-
-        # lower and upper bounds on control inputs
-        # prog.AddBoundingBoxConstraint(0, m*g/2 * thrust_2_mass_ratio, v[n]) 
-        # prog.AddBoundingBoxConstraint(0, m*g/2 * thrust_2_mass_ratio, w[n]) 
-
-        # linear dynamics
-        prog.AddLinearEqualityConstraint( x[n+1] == x[n] + dt * dx[n]  ) 
-        prog.AddLinearEqualityConstraint( y[n+1] == y[n] + dt * dy[n] ) 
-        prog.AddLinearEqualityConstraint( th[n+1] == th[n] + dt * dth[n] ) 
-        drag = 0.2
-        prog.AddLinearEqualityConstraint( dth[n+1] == dth[n]*(1-drag) + dt * (v[n] - w[n]) * r / I) # - dth[n]*dt*drag  )
-        # cons.append( prog.AddLinearEqualityConstraint( dth[n+1] == dth[n] + dt * (v[n] - w[n]) * r / I ) )
-        # quadratic dynamics
-        prog.AddConstraint( dx[n+1] == dx[n] + dt * (-(v[n] + w[n]) * s[n] / m) ) 
-        prog.AddConstraint( dy[n+1] == dy[n] + dt * ( (v[n] + w[n]) * c[n] / m - g) ) 
-        prog.AddLinearEqualityConstraint( c[n+1] == c[n] + dt * dc[n] ) 
-        prog.AddLinearEqualityConstraint( s[n+1] == s[n] + dt * ds[n] ) 
-        prog.AddConstraint( dc[n+1] == dc[n] - dt * ( r/I*(v[n]-w[n])*s[n] + dth[n]*ds[n] ) ) 
-        prog.AddConstraint( ds[n+1] == ds[n] + dt * ( r/I*(v[n]-w[n])*c[n] + dth[n]*dc[n] ) ) 
-        # append all the constraints
-
-    # add the cost -- this is fine, cost we can put over the whole thing
+    # dynamics of s^2 + c^2 = 1a
+    prog.AddConstraint( s[1]*ds[1] + c[1]*dc[1] == 0)
+    prog.AddConstraint( c[1] <= 1.03)
+    # linear dynamics
+    prog.AddLinearEqualityConstraint( x[1] == x[0] + dt * dx[0]  ) 
+    prog.AddLinearEqualityConstraint( y[1] == y[0] + dt * dy[0] ) 
+    prog.AddLinearEqualityConstraint( th[1] == th[0] + dt * dth[0] ) 
+    drag = 0.15
+    prog.AddLinearEqualityConstraint( dth[1] == dth[0]*(1-drag) + dt * (v[0] - w[0]) * r / I) # - dth[0]*dt*drag  )
+    # cons.append( prog.AddLinearEqualityConstraint( dth[1] == dth[0] + dt * (v[0] - w[0]) * r / I ) )
+    # quadratic dynamics
+    prog.AddConstraint( dx[1] == dx[0] + dt * (-(v[0] + w[0]) * s[0] / m) ) 
+    prog.AddConstraint( dy[1] == dy[0] + dt * ( (v[0] + w[0]) * c[0] / m - g) ) 
+    prog.AddLinearEqualityConstraint( c[1] == c[0] + dt * dc[0] ) 
+    prog.AddLinearEqualityConstraint( s[1] == s[0] + dt * ds[0] ) 
+    prog.AddConstraint( dc[1] == dc[0] - dt * ( r/I*(v[0]-w[0])*s[0] + dth[0]*ds[0] ) ) 
+    prog.AddConstraint( ds[1] == ds[0] + dt * ( r/I*(v[0]-w[0])*c[0] + dth[0]*dc[0] ) ) 
+    # boundary conditions
     z_star = np.hstack( (desired_pos, np.array([0, 0,0,0, 1,0, 0,0]) ))
     u_star = m * g / 2.0 * np.array([1, 1])
+    z_0 = np.array( [0,0,0, 0,0,0, 1,0, 0,0] )
+    boundary_conditions = Qf, z_star, z_0 # need for final cost / initial conditions
+    
     # build the cost
     cost = 0
     for i in range(N):
         cost = cost + (z[i]-z_star).dot(Q).dot(z[i]-z_star) + (u[i]-u_star).dot(R).dot(u[i]-u_star)
-
     prog.AddCost(cost)
-
-    z_0 = np.array( [0,0,0, 0,0,0, 1,0, 0,0] )
-    boundary_conditions = Qf, z_star, z_0
 
     timer = timeit()
     relaxed_prog, zn, un, psd_mats = make_chordal_sdp_relaxation( horizon, state_dim, control_dim, prog, boundary_conditions)
@@ -420,4 +288,4 @@ def make_chordal_sdp_program(N, desired_pos = np.array([2,0]), dt = 0.2):
 
     
 if __name__ == "__main__":
-    make_chordal_sdp_program(15)
+    make_chordal_sdp_program(12)

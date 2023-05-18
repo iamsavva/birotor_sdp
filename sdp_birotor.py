@@ -66,8 +66,6 @@ def get_solution_from_X(N, X, verbose = False):
             if name in ("v","w"):
                 r = 3
             YAY( name, np.round(res[name],r) )
-
-    INFO("ddy", (res["v"] + res["w"]) * res["c"] / plant.mass - plant.gravity)
     return res
 
 def solve_sdp_birotor(N:int, desired_pos:npt.NDArray = np.array([2,0]), dt:float = 0.2, multiply_equality_constraints = False):
