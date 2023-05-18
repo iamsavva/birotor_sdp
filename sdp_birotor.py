@@ -2,7 +2,7 @@ import typing as T
 
 import numpy as np
 import numpy.typing as npt
-import scipy as sp
+# import scipy as sp
 
 from matplotlib import pyplot as plt
 import matplotlib.patches as patches
@@ -36,7 +36,7 @@ from pydrake.solvers import MathematicalProgram, Solve
 from underactuated import running_as_notebook
 from underactuated.quadrotor2d import Quadrotor2D, Quadrotor2DVisualizer
 
-from nonlinear_birotor import make_a_nonconvex_birotor_program
+from nonlinear_birotor import make_a_nonconvex_birotor_program, solve_nonconvex_birotor
 
 def get_solution_from_X(N, X, verbose = False):
     builder = DiagramBuilder()
@@ -87,8 +87,15 @@ def solve_sdp_birotor(N:int, desired_pos:npt.NDArray = np.array([2,0]), dt:float
     print("Matrix rank", np.sum(eigenvals>1e-4))
     res = get_solution_from_X(N, X_val, verbose=True)
 
-    return relaxed_prog, relaxed_solution, res
+    print("---")
+
+    # warmstart = make_a_warmstart_from_initial_condition_and_control_sequence(res["v"], res["w"], horizon)
+
+    # solve_nonconvex_birotor(horizon, warmstart=res["full-state"])
+    solve_nonconvex_birotor(N, warmstart=res)
+
+    # return relaxed_prog, relaxed_solution, res
 
     
 if __name__ == "__main__":
-    solve_sdp_birotor(12, multiply_equality_constraints=True)
+    solve_sdp_birotor(12, multiply_equality_constraints=False)

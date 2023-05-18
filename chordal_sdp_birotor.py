@@ -42,6 +42,8 @@ from sdp import (
     _get_monomial_coeffs, _get_sol_from_svd, _linear_binding_to_expressions, _quadratic_polynomial_to_homoenuous_form, 
     _generic_constraint_bindings_to_polynomials, add_constraints_to_psd_mat_from_prog
 )
+from nonlinear_birotor import make_a_warmstart_from_initial_condition_and_control_sequence, solve_nonconvex_birotor
+
 
 def make_chordal_sdp_relaxation(N:int, state_dim:int, control_dim:int, prog: MathematicalProgram, boundary_conditions:T.Tuple[npt.NDArray, npt.NDArray, npt.NDArray], multiply_equality_constraints:bool = True):
     # ----------------------------------------------------------------------
@@ -150,8 +152,7 @@ def make_chordal_sdp_relaxation(N:int, state_dim:int, control_dim:int, prog: Mat
 
     return relaxed_prog, zn, un, psd_mats
 
-
-def print_chordal_solution(solution, zn, un, horizon):
+def get_chordal_solution(solution, zn, un, horizon, verbose = True):
     x = []
     y = []
     th = []
@@ -181,18 +182,27 @@ def print_chordal_solution(solution, zn, un, horizon):
         if n != horizon:
             v.append(solution.GetSolution(un[n][0]))
             w.append(solution.GetSolution(un[n][1]))
-    YAY("x", np.round(np.array(x).reshape(horizon),2) )
-    YAY("y", np.round(np.array(y).reshape(horizon),2) )
-    YAY("th", np.round(np.array(th).reshape(horizon),2) )
-    YAY("dx", np.round(np.array(dx).reshape(horizon),2) )
-    YAY("dy", np.round(np.array(dy).reshape(horizon),2) )
-    YAY("dth", np.round(np.array(dth).reshape(horizon),2) )
-    YAY("c", np.round(np.array(c).reshape(horizon),2) )
-    YAY("s", np.round(np.array(s).reshape(horizon),2) )
-    YAY("dc", np.round(np.array(dc).reshape(horizon),2) )
-    YAY("ds", np.round(np.array(ds).reshape(horizon),2) )
-    INFO("v", np.round(np.array(v).reshape(horizon),3) )
-    INFO("w", np.round(np.array(w).reshape(horizon),3) )
+    res = dict()
+    res["x"] = np.array(x).reshape(horizon)
+    res["y"] = np.array(y).reshape(horizon)
+    res["th"] = np.array(th).reshape(horizon)
+    res["dx"] = np.array(dx).reshape(horizon)
+    res["dy"] = np.array(dy).reshape(horizon)
+    res["dth"] = np.array(dth).reshape(horizon)
+    res["c"] = np.array(c).reshape(horizon)
+    res["s"] = np.array(s).reshape(horizon)
+    res["dc"] = np.array(dc).reshape(horizon)
+    res["ds"] = np.array(ds).reshape(horizon)
+    res["v"] = np.array(v).reshape(horizon)
+    res["w"] = np.array(w).reshape(horizon)
+    res["full-state"] = np.hstack((res["x"], res["y"], res["th"], res["dx"],res["dy"],res["dth"],res["c"],res["s"],res["dc"],res["ds"],res["v"], res["w"]))
+    if verbose:
+        for name in res.keys():
+            r = 2
+            if name in ("v","w"):
+                r = 3
+            YAY( name, np.round(res[name],r) )
+    return res
 
 def make_chordal_sdp_program(N, desired_pos = np.array([2,0]), dt = 0.2):
     horizon = N
@@ -278,13 +288,19 @@ def make_chordal_sdp_program(N, desired_pos = np.array([2,0]), dt = 0.2):
 
     timer.dt("making the chordal sdp")
     solution = Solve(relaxed_prog)
-    
     timer.dt("solving the chordal sdp")
+
     print( solution.is_success() )
     print( solution.get_optimal_cost() )
     print( solution.get_solution_result() )
 
-    print_chordal_solution(solution, zn, un, horizon)
+    res = get_chordal_solution(solution, zn, un, horizon, True)
+    print("--------")
+
+    # warmstart = make_a_warmstart_from_initial_condition_and_control_sequence(res["v"], res["w"], horizon)
+
+    # solve_nonconvex_birotor(horizon, warmstart=res["full-state"])
+    solve_nonconvex_birotor(horizon, warmstart=res)
 
     
 if __name__ == "__main__":

@@ -2,10 +2,10 @@ import typing as T
 
 import numpy as np
 import numpy.typing as npt
-import scipy as sp
+# import scipy as sp
 
-from matplotlib import pyplot as plt
-import matplotlib.patches as patches
+# from matplotlib import pyplot as plt
+# import matplotlib.patches as patches
 
 from pydrake.solvers import (
     MathematicalProgram,
@@ -14,7 +14,9 @@ from pydrake.solvers import (
     SolverOptions,
     CommonSolverOption, 
     IpoptSolver,
-    GurobiSolver
+    SnoptSolver,
+    GurobiSolver,
+    SolverId
 )
 from pydrake.symbolic import Polynomial, Variable, Variables, Evaluate
 from sdp import create_sdp_relaxation, _get_sol_from_svd
@@ -23,12 +25,12 @@ from pydrake.math import eq, le, ge
 
 from util import timeit, YAY, WARN, INFO, ERROR
 
-import math
+# import math
 
-import matplotlib.pyplot as plt
-import mpld3
+# import matplotlib.pyplot as plt
+# import mpld3
 import numpy as np
-from IPython.display import HTML, display
+# from IPython.display import HTML, display
 from pydrake.all import  DiagramBuilder 
 from pydrake.solvers import MathematicalProgram, Solve
 
@@ -36,8 +38,8 @@ from pydrake.solvers import MathematicalProgram, Solve
 from underactuated import running_as_notebook
 from underactuated.quadrotor2d import Quadrotor2D, Quadrotor2DVisualizer
 
-if running_as_notebook:
-    mpld3.enable_notebook()
+# if running_as_notebook:
+#     mpld3.enable_notebook()
 
 
 
@@ -86,10 +88,11 @@ def make_a_nonconvex_birotor_program(N:int, desired_pos:npt.NDArray = np.array([
         prog.AddBoundingBoxConstraint( -10*np.ones(N),  10*np.ones(N),  dx[1:])
         prog.AddBoundingBoxConstraint( -10*np.ones(N),  10*np.ones(N),  dy[1:])
         prog.AddBoundingBoxConstraint( -np.pi*np.ones(N),  np.pi*np.ones(N),  dth[1:])
-        # prog.AddBoundingBoxConstraint(-1*np.ones(N),  1*np.ones(N),  c[1:])
-        # prog.AddBoundingBoxConstraint(-1*np.ones(N),  1*np.ones(N),  s[1:])
-        # prog.AddBoundingBoxConstraint(-1*np.ones(N),  1*np.ones(N),  dc[1:])
-        # prog.AddBoundingBoxConstraint(-1*np.ones(N),  1*np.ones(N),  ds[1:])
+
+        prog.AddBoundingBoxConstraint(-1*np.ones(N),  1.03*np.ones(N),  c[1:])
+        prog.AddBoundingBoxConstraint(-1*np.ones(N),  1.03*np.ones(N),  s[1:])
+        prog.AddBoundingBoxConstraint(-1*np.ones(N),  1.03*np.ones(N),  dc[1:])
+        prog.AddBoundingBoxConstraint(-1*np.ones(N),  1.03*np.ones(N),  ds[1:])
         # lower and upper bounds on control inputs
         prog.AddBoundingBoxConstraint(0, m*g/2 * thrust_2_mass_ratio, v)
         prog.AddBoundingBoxConstraint(0, m*g/2 * thrust_2_mass_ratio, w)
@@ -101,7 +104,9 @@ def make_a_nonconvex_birotor_program(N:int, desired_pos:npt.NDArray = np.array([
         prog.AddLinearEqualityConstraint( th[n+1] == th[n] + dt * dth[n] )
         # use drag dynamics
         drag = 0.15
-        prog.AddLinearEqualityConstraint( dth[n+1] == dth[n]*(1-drag) + dt * (v[n] - w[n]) * r / I) # - dth[n]*dt*drag  )
+        
+        prog.AddLinearEqualityConstraint( 0 == -dth[n+1] + dth[n]*(1-drag)  + dt * (v[n] - w[n]) * r / I) # - dth[n]*dt*drag  )
+        # prog.AddLinearEqualityConstraint( dth[n+1] == dth[n]*(1-drag)  + dt * (v[n] - w[n]) * r / I) # - dth[n]*dt*drag  )
         # prog.AddLinearEqualityConstraint( dth[n+1] == dth[n] + dt * (v[n] - w[n]) * r / I )
         # quadratic constraints
         prog.AddConstraint( dx[n+1] == dx[n] + dt * (-(v[n] + w[n]) * s[n] / m) )
@@ -130,21 +135,177 @@ def make_a_nonconvex_birotor_program(N:int, desired_pos:npt.NDArray = np.array([
         return prog, (x,y,th,dx,dy,dth,c,s,dc,ds,v,w)
     
 
+def make_a_warmstart_from_initial_condition_and_control_sequence( v,w, N:int, x0:npt.NDArray = np.array([0,0,0, 0,0,0, 1,0, 0,0]), dt:float=0.2 ):
+    assert 1 <= len(v) <= N
+    assert len(v) == len(w)
+    while len(v) < N:
+        v = np.hstack((v, v[-1]))
+        w = np.hstack((w, w[-1]))
+    
+    builder = DiagramBuilder()
+    plant = builder.AddSystem(Quadrotor2D())
+    # define constants
+    r = plant.length
+    m = plant.mass
+    I = plant.inertia
+    g = plant.gravity
 
-# def make_a_warmstart_from_smaller_problem()
+    x = np.array([x0[0]] + [0] * (N))
+    y = np.array([x0[1]] + [0] * (N) )
+    th = np.array([x0[2]] + [0] * (N) )
+    dx = np.array([x0[3]] + [0] * (N) )
+    dy = np.array([x0[4]] + [0] * (N) )
+    dth = np.array([x0[5]] + [0] * (N) )
+    c = np.array([x0[6]] + [0] * (N) )
+    s = np.array([x0[7]] + [0] * (N) )
+    dc = np.array([x0[8]] + [0] * (N) )
+    ds = np.array([x0[9]] + [0] * (N) )
+    for n in range(N):
+        print(v[n], w[n])
+        x[n+1] = x[n] + dt * dx[n]
+        y[n+1] = y[n] + dt * dy[n]
+        th[n+1] = th[n] + dt * dth[n]
+        # use drag dynamics
+        drag = 0.15
+        dth[n+1] = dth[n]*(1-drag) + dt * (v[n] - w[n]) * r / I
+        # prog.AddLinearEqualityConstraint( dth[n+1] == dth[n] + dt * (v[n] - w[n]) * r / I )
+        # quadratic constraints
+        dx[n+1] = dx[n] + dt * (-(v[n] + w[n]) * s[n] / m)
+        dy[n+1] = dy[n] + dt * ( (v[n] + w[n]) * c[n] / m - g)
+        c[n+1] = c[n] + dt * dc[n]
+        s[n+1] = s[n] + dt * ds[n]
+        dc[n+1] = dc[n] - dt * ( r/I*(v[n]-w[n])*s[n] + dth[n]*ds[n] )
+        ds[n+1] = ds[n] + dt * ( r/I*(v[n]-w[n])*c[n] + dth[n]*dc[n] )
 
-def solve_nonconvex_birotor(N:int, desired_pos:npt.NDArray = np.array([2,0]), dt:float = 0.2):
+    print("x", x)
+    print("y", y)
+    print("th", th)
+    print("dx", dx)
+    print("dy", dy)
+    print("dth", dth)
+    print("c", c)
+    print("s", s)
+    print("dc", dc)
+    print("ds", ds)
+    print("v", v)
+    print("w", w)
+    
+    return np.hstack((x[1:],y[1:],th[1:],dx[1:],dy[1:],dth[1:],c[1:],s[1:],dc[1:],ds[1:],v,w))
+
+def make_nonlinear_warmstart_from_small_solution(big_N, small_N, desired_pos:npt.NDArray = np.array([2,0]), dt:float = 0.2):
+    prog, (x,y,th,dx,dy,dth,c,s,dc,ds,v,w) = make_a_nonconvex_birotor_program(small_N, desired_pos, dt, False, get_vars=True)
+    solution = Solve(prog)
+    assert solution.is_success(), ERROR("small problem didn't solve, use smaller N")
+    INFO("Small program got solved")
+    v_sol = solution.GetSolution(v).reshape(small_N)
+    w_sol = solution.GetSolution(w).reshape(small_N)
+
+    x0 = np.array([0,0,0, 0,0,0, 1,0, 0,0])
+    warmstart = make_a_warmstart_from_initial_condition_and_control_sequence(v_sol, w_sol, x0, big_N, dt)
+    return warmstart
+
+def make_trivial_warmstart(N, desired_pos:npt.NDArray = np.array([2,0]), dt:float = 0.2):
+    builder = DiagramBuilder()
+    plant = builder.AddSystem(Quadrotor2D())
+    # define constants
+    m = plant.mass
+    g = plant.gravity
+    x0 = np.array([0,0,0, 0,0,0, 1,0, 0,0])
+    v_sol = np.ones(N) * m * g / 2.0
+    w_sol = np.ones(N) * m * g / 2.0
+    warmstart = make_a_warmstart_from_initial_condition_and_control_sequence(v_sol, w_sol, x0, N, dt)
+    return warmstart
+
+def solve_nonconvex_birotor(N:int, desired_pos:npt.NDArray = np.array([2,0]), dt:float = 0.2, warmstart = None):
+    res = warmstart
     prog, (x,y,th,dx,dy,dth,c,s,dc,ds,v,w) = make_a_nonconvex_birotor_program(N, desired_pos, dt, False, get_vars=True)
     INFO("Program built.")
+    prog.SetInitialGuess(x[1:], res["x"])
+    prog.SetInitialGuess(y[1:], res["y"])
+    prog.SetInitialGuess(th[1:], res["th"])
+    prog.SetInitialGuess(dx[1:], res["dx"])
+    prog.SetInitialGuess(dy[1:], res["dy"])
+    prog.SetInitialGuess(dth[1:], res["dth"])
+    prog.SetInitialGuess(c[1:], res["c"])
+    prog.SetInitialGuess(s[1:], res["s"])
+    prog.SetInitialGuess(dc[1:], res["dc"])
+    prog.SetInitialGuess(ds[1:], res["ds"])
+    prog.SetInitialGuess(v, res["v"])
+    prog.SetInitialGuess(w, res["w"])
 
+    # solver_options = SolverOptions()
+    # solver_options.SetOption(CommonSolverOption.kPrintToConsole, 1)
+
+    INFO("Solving ", N)
     timer = timeit()
-    solution = Solve(prog)
-    timer.dt("Program solved.")
+    # solver = SnoptSolver()
+    solver = IpoptSolver()
+    solution = solver.Solve(prog)
+
+    # solver = IpoptSolver()
+    # if warmstart is None:
+    #     solution = solver.Solve(prog)
+    # else:
+    #     INFO("Using warmstart")
+    #     solution = solver.Solve(prog, initial_guess=warmstart)
+    # timer.dt("Solving program")
     
     if not solution.is_success():
         ERROR("solve failed")
+        print(solution.get_solver_id().name())
+        # print(solution.get_optimal_cost())
+        print(solution.get_solution_result())
     else:
         YAY("solved!")
+        print(solution.get_solver_id().name())
+        print(solution.get_solution_result())
+    if solution.is_success():
+        print(solution.get_optimal_cost())
+        print(solution.get_solution_result())
+
+        INFO( "x", np.round(solution.GetSolution(x[1:]),2) )
+        INFO( "y",  np.round(solution.GetSolution(y[1:]),2) )
+        INFO( "th", np.round(solution.GetSolution(th[1:]),2) )
+        print("---")
+        INFO( "dx", np.round(solution.GetSolution(dx[1:]),2) )
+        INFO( "dy",  np.round(solution.GetSolution(dy[1:]),2) )
+        INFO( "dth", np.round(solution.GetSolution(dth[1:]),2) )
+        print("---")
+        INFO( "c", np.round(solution.GetSolution(c[1:]),2) )
+        INFO( "s",  np.round(solution.GetSolution(s[1:]),2) )
+        print("---")
+        INFO( "dc", np.round(solution.GetSolution(dc[1:]),2) )
+        INFO( "ds",  np.round(solution.GetSolution(ds[1:]),2) )
+        cc = np.round(solution.GetSolution(c[1:]),2) ** 2
+        ss = np.round(solution.GetSolution(s[1:]),2) ** 2
+        INFO( "c2+s2", cc+ss)
+        print("---")
+        INFO( "v", np.round(solution.GetSolution(v),3) )
+        INFO( "w",  np.round(solution.GetSolution(w),3) )
+    return prog, solution
+
+
+def big_problem(big_N, small_N):
+    # warmstart = make_nonlinear_warmstart_from_small_solution(big_N, small_N)
+    warmstart = make_trivial_warmstart(big_N)
+    prog, (x,y,th,dx,dy,dth,c,s,dc,ds,v,w) = make_a_nonconvex_birotor_program(big_N, get_vars=True)
+
+    solver_options = SolverOptions()
+    solver_options.SetOption(CommonSolverOption.kPrintToConsole, 1)
+
+    timer = timeit()
+
+    solution = Solve(prog, initial_guess=warmstart, solver_options=solver_options)
+    timer.dt("Solving big program")
+    
+    if not solution.is_success():
+        ERROR("solve failed")
+        print(solution.get_solver_id())
+        print(solution.get_optimal_cost())
+        print(solution.get_solution_result())
+    else:
+        YAY("solved!")
+
     if solution.is_success():
         print(solution.get_solver_id())
         print(solution.get_optimal_cost())
@@ -171,6 +332,7 @@ def solve_nonconvex_birotor(N:int, desired_pos:npt.NDArray = np.array([2,0]), dt
         INFO( "w",  np.round(solution.GetSolution(w),3) )
     return prog, solution
 
-
-if __name__ == "__main__":
-    solve_nonconvex_birotor(15)
+if __name__ == "__main__":    
+    # solve_nonconvex_birotor(10)
+    solve_nonconvex_birotor(12)
+    # solve_nonconvex_birotor(16)
