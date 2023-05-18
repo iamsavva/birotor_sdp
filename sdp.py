@@ -114,7 +114,7 @@ def _quadratic_cost_binding_to_homogenuous_form(
     x = binding.variables()
     # Note that we are not multiplying with 1/2 here, as we should. However,
     # we use homogenous form, so this does not matter.
-    poly = sym.Polynomial(x.T.dot(Q.dot(x)) + b.T.dot(x) + c)
+    poly = sym.Polynomial(0.5*x.T.dot(Q.dot(x)) +b.T.dot(x) + c)
     Q_hom = _quadratic_polynomial_to_homoenuous_form(poly, basis, num_vars)
     return Q_hom
 
@@ -266,13 +266,15 @@ def create_sdp_relaxation(
                 options = np.random.choice(num_vars, int(num_vars*sample_percentage))
                 for i in options:
                     j += 1
-                    A = np.outer(a, I[i])
-                    relaxed_prog.AddLinearConstraint( np.sum( X * ( A + A.T ) ) == 0 )
+                    # A = np.outer(a, I[i])
+                    relaxed_prog.AddLinearConstraint(X[i].dot(a) == 0)
+                    # relaxed_prog.AddLinearConstraint( np.sum( X * ( A + A.T ) ) == 0 )
 
             for i in range(num_cons):
                 j += 1
-                A = np.outer(a, I[i])
-                relaxed_prog.AddLinearConstraint( np.sum( X * ( A + A.T ) ) == 0 )
+                relaxed_prog.AddLinearConstraint(X[i].dot(a) == 0)
+                # A = np.outer(a, I[i])
+                # relaxed_prog.AddLinearConstraint( np.sum( X * ( A + A.T ) ) == 0 )
         print("added ", j, "linear equality constraints")
 
     has_linear_ineq_constraints = (

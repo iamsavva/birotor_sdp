@@ -41,7 +41,7 @@ if running_as_notebook:
 
 
 
-def make_a_nonconvex_birotor_program(N:int, desired_pos:npt.NDArray = np.array([2,0]), dt:float = 0.2, for_sdp_solver:bool = False):
+def make_a_nonconvex_birotor_program(N:int, desired_pos:npt.NDArray = np.array([2,0]), dt:float = 0.2, for_sdp_solver:bool = False, get_vars = False):
     builder = DiagramBuilder()
     plant = builder.AddSystem(Quadrotor2D())
 
@@ -75,12 +75,14 @@ def make_a_nonconvex_birotor_program(N:int, desired_pos:npt.NDArray = np.array([
 
     if for_sdp_solver:
         for n in range(1, N+1):
-            prog.AddConstraint( s[n]**2 + c[n]**2 >= 0.99 )
-            prog.AddConstraint( s[n]**2 + c[n]**2 <= 1.05 )
+            prog.AddConstraint( s[n]*ds[n] + c[n]*dc[n] == 0)
+            # prog.AddConstraint( s[n]**2 + c[n]**2 >= 0.99 )
+            # prog.AddConstraint( s[n]**2 + c[n]**2 <= 1.05 )
     else:
         for n in range(1, N+1):
-            prog.AddConstraint( s[n]**2 + c[n]**2 >= 0.85 )
-            prog.AddConstraint( s[n]**2 + c[n]**2 <= 1.1 )
+            prog.AddConstraint( s[n]*ds[n] + c[n]*dc[n] == 0)
+            # prog.AddConstraint( s[n]**2 + c[n]**2 >= 0.85 )
+            # prog.AddConstraint( s[n]**2 + c[n]**2 <= 1.1 )
         # if solving with nonlinear solver -- relax cos^2 + sin^2 = 1, add bounding boxes
         prog.AddBoundingBoxConstraint(-5*np.ones(N),  5*np.ones(N),  x[1:])
         prog.AddBoundingBoxConstraint(-5*np.ones(N),  5*np.ones(N),  y[1:])
@@ -88,6 +90,10 @@ def make_a_nonconvex_birotor_program(N:int, desired_pos:npt.NDArray = np.array([
         prog.AddBoundingBoxConstraint( -10*np.ones(N),  10*np.ones(N),  dx[1:])
         prog.AddBoundingBoxConstraint( -10*np.ones(N),  10*np.ones(N),  dy[1:])
         prog.AddBoundingBoxConstraint( -np.pi*np.ones(N),  np.pi*np.ones(N),  dth[1:])
+        # prog.AddBoundingBoxConstraint(-1*np.ones(N),  1*np.ones(N),  c[1:])
+        # prog.AddBoundingBoxConstraint(-1*np.ones(N),  1*np.ones(N),  s[1:])
+        # prog.AddBoundingBoxConstraint(-1*np.ones(N),  1*np.ones(N),  dc[1:])
+        # prog.AddBoundingBoxConstraint(-1*np.ones(N),  1*np.ones(N),  ds[1:])
 
     # lower and upper bounds on control inputs
     prog.AddBoundingBoxConstraint(0, m*g/2 * thrust_2_mass_ratio, v)
@@ -98,7 +104,9 @@ def make_a_nonconvex_birotor_program(N:int, desired_pos:npt.NDArray = np.array([
         prog.AddLinearEqualityConstraint( x[n+1] == x[n] + dt * dx[n]  )
         prog.AddLinearEqualityConstraint( y[n+1] == y[n] + dt * dy[n] )
         prog.AddLinearEqualityConstraint( th[n+1] == th[n] + dt * dth[n] )
-        prog.AddLinearEqualityConstraint( dth[n+1] == dth[n] + dt * (v[n] - w[n]) * r / I )
+        # prog.AddLinearEqualityConstraint( dth[n+1] == dth[n] + dt * (v[n] - w[n]) * r / I )
+        drag = 0.15
+        prog.AddLinearEqualityConstraint( dth[n+1] == dth[n]*(1-drag) + dt * (v[n] - w[n]) * r / I) # - dth[n]*dt*drag  )
         # quadratic constraints
         prog.AddConstraint( dx[n+1] == dx[n] + dt * (-(v[n] + w[n]) * s[n] / m) )
         prog.AddConstraint( dy[n+1] == dy[n] + dt * ( (v[n] + w[n]) * c[n] / m - g) )
@@ -119,11 +127,15 @@ def make_a_nonconvex_birotor_program(N:int, desired_pos:npt.NDArray = np.array([
     cost += (z[N]-z_star).dot(Qf).dot(z[N]-z_star)
     prog.AddCost(cost)
 
-    return prog
+    if not get_vars:
+        return prog
+    else: 
+        return prog, (x,y,th,dx,dy,dth,c,s,dc,ds,v,w)
 
+# def make_a_warmstart_from_smaller_problem()
 
 def solve_nonconvex_birotor(N:int, desired_pos:npt.NDArray = np.array([2,0]), dt:float = 0.2):
-    prog = make_a_nonconvex_birotor_program(N, desired_pos, dt, False)
+    prog, (x,y,th,dx,dy,dth,c,s,dc,ds,v,w) = make_a_nonconvex_birotor_program(N, desired_pos, dt, False, get_vars=True)
     INFO("Program built.")
 
     timer = timeit()
@@ -134,27 +146,32 @@ def solve_nonconvex_birotor(N:int, desired_pos:npt.NDArray = np.array([2,0]), dt
         ERROR("solve failed")
     else:
         YAY("solved!")
-    print(solution.get_solver_id())
-    print(solution.get_optimal_cost())
-    print(solution.get_solution_result())
+    if solution.is_success():
+        print(solution.get_solver_id())
+        print(solution.get_optimal_cost())
+        print(solution.get_solution_result())
 
-    INFO( "x", np.round(solution.GetSolution(x[1:]),2) )
-    INFO( "y",  np.round(solution.GetSolution(y[1:]),2) )
-    INFO( "th", np.round(solution.GetSolution(th[1:]),2) )
-    print("---")
-    INFO( "dx", np.round(solution.GetSolution(dx[1:]),2) )
-    INFO( "dy",  np.round(solution.GetSolution(dy[1:]),2) )
-    INFO( "dth", np.round(solution.GetSolution(dth[1:]),2) )
-    print("---")
-    INFO( "c", np.round(solution.GetSolution(c[1:]),2) )
-    INFO( "s",  np.round(solution.GetSolution(s[1:]),2) )
-    print("---")
-    INFO( "dc", np.round(solution.GetSolution(dc[1:]),2) )
-    INFO( "ds",  np.round(solution.GetSolution(ds[1:]),2) )
-    cc = np.round(solution.GetSolution(c[1:]),2) ** 2
-    ss = np.round(solution.GetSolution(s[1:]),2) ** 2
-    INFO( "c2+s2", cc+ss)
-    print("---")
-    INFO( "v", np.round(solution.GetSolution(v),2) )
-    INFO( "w",  np.round(solution.GetSolution(w),2) )
+        INFO( "x", np.round(solution.GetSolution(x[1:]),2) )
+        INFO( "y",  np.round(solution.GetSolution(y[1:]),2) )
+        INFO( "th", np.round(solution.GetSolution(th[1:]),2) )
+        print("---")
+        INFO( "dx", np.round(solution.GetSolution(dx[1:]),2) )
+        INFO( "dy",  np.round(solution.GetSolution(dy[1:]),2) )
+        INFO( "dth", np.round(solution.GetSolution(dth[1:]),2) )
+        print("---")
+        INFO( "c", np.round(solution.GetSolution(c[1:]),2) )
+        INFO( "s",  np.round(solution.GetSolution(s[1:]),2) )
+        print("---")
+        INFO( "dc", np.round(solution.GetSolution(dc[1:]),2) )
+        INFO( "ds",  np.round(solution.GetSolution(ds[1:]),2) )
+        cc = np.round(solution.GetSolution(c[1:]),2) ** 2
+        ss = np.round(solution.GetSolution(s[1:]),2) ** 2
+        INFO( "c2+s2", cc+ss)
+        print("---")
+        INFO( "v", np.round(solution.GetSolution(v),3) )
+        INFO( "w",  np.round(solution.GetSolution(w),3) )
     return prog, solution
+
+
+if __name__ == "__main__":
+    solve_nonconvex_birotor(15)

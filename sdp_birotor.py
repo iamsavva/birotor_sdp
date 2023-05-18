@@ -62,7 +62,10 @@ def get_solution_from_X(N, X, verbose = False):
     res["w"] = x_vec[10*N1+N:10*N1+2*N]
     if verbose:
         for name in res.keys():
-            YAY( name, np.round(res[name],2) )
+            r = 2
+            if name in ("v","w"):
+                r = 3
+            YAY( name, np.round(res[name],r) )
 
     INFO("ddy", (res["v"] + res["w"]) * res["c"] / plant.mass - plant.gravity)
     return res
@@ -89,3 +92,5 @@ def solve_sdp_birotor(N:int, desired_pos:npt.NDArray = np.array([2,0]), dt:float
     return relaxed_prog, relaxed_solution, res
 
     
+if __name__ == "__main__":
+    solve_sdp_birotor(12, multiply_equality_constraints=True)
