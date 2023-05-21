@@ -1,7 +1,10 @@
 from colorama import Fore
 import typing as T
 import time
-
+from pydrake.solvers import (
+    MathematicalProgramResult,
+    SolverOptions,
+)
 
 def ERROR(*texts, verbose: bool = True):
     if verbose:
@@ -21,6 +24,19 @@ def INFO(*texts, verbose: bool = True):
 def YAY(*texts, verbose: bool = True):
     if verbose:
         print(Fore.GREEN + " ".join([str(text) for text in texts]))
+
+def diditwork(solution:MathematicalProgramResult):
+    if solution.is_success():
+        printer = YAY
+        printer("solve successful!")
+    else:
+        printer = ERROR
+        printer("solve failed")
+    printer( solution.get_optimal_cost() )
+    printer(solution.get_solution_result())
+    printer("Solver is", solution.get_solver_id().name())
+    printer("Solver status:", solution.get_solver_details())
+
 
 
 def all_possible_combinations_of_items(item_set: T.List[str], num_items: int):

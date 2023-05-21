@@ -2,10 +2,6 @@ import typing as T
 
 import numpy as np
 import numpy.typing as npt
-import scipy as sp
-
-from matplotlib import pyplot as plt
-import matplotlib.patches as patches
 
 import pydrake.symbolic as sym
 
@@ -21,16 +17,13 @@ from pydrake.solvers import (
 
 from pydrake.math import eq, le, ge
 
-from util import timeit, YAY, WARN, INFO, ERROR
+from util import timeit, YAY, WARN, INFO, ERROR, diditwork
 
-import matplotlib.pyplot as plt
 import numpy as np
-from IPython.display import HTML, display
 from pydrake.all import  DiagramBuilder 
 from pydrake.solvers import MathematicalProgram, Solve
 
 # from underactuated import ConfigureParser, running_as_notebook
-from underactuated import running_as_notebook
 from underactuated.quadrotor2d import Quadrotor2D, Quadrotor2DVisualizer
 
 from utilities import unit_vector
@@ -204,8 +197,7 @@ def get_chordal_solution(solution, zn, un, horizon, verbose = True):
             YAY( name, np.round(res[name],r) )
     return res
 
-def make_chordal_sdp_program(N, desired_pos = np.array([2,0]), dt = 0.2):
-    horizon = N
+def make_a_1_step_nonconvex_problem(N, desired_pos = np.array([2,0]), dt = 0.2):
     builder = DiagramBuilder()
     plant = builder.AddSystem(Quadrotor2D())
     # define constants
@@ -261,16 +253,18 @@ def make_chordal_sdp_program(N, desired_pos = np.array([2,0]), dt = 0.2):
     prog.AddLinearEqualityConstraint( x[1] == x[0] + dt * dx[0]  ) 
     prog.AddLinearEqualityConstraint( y[1] == y[0] + dt * dy[0] ) 
     prog.AddLinearEqualityConstraint( th[1] == th[0] + dt * dth[0] ) 
-    drag = 0.15
-    prog.AddLinearEqualityConstraint( dth[1] == dth[0]*(1-drag) + dt * (v[0] - w[0]) * r / I) # - dth[0]*dt*drag  )
+    drag = 0.15 / dt
+    ddth_n = (v[0] - w[0]) * r / I - drag * dth[0]
+    prog.AddLinearEqualityConstraint( dth[1] == dth[0] + dt * ddth_n ) # - dth[0]*dt*drag  )
+    # prog.AddLinearEqualityConstraint( dth[1] == dth[0]*(1-drag) + dt * (v[0] - w[0]) * r / I) # - dth[0]*dt*drag  )
     # cons.append( prog.AddLinearEqualityConstraint( dth[1] == dth[0] + dt * (v[0] - w[0]) * r / I ) )
     # quadratic dynamics
     prog.AddConstraint( dx[1] == dx[0] + dt * (-(v[0] + w[0]) * s[0] / m) ) 
     prog.AddConstraint( dy[1] == dy[0] + dt * ( (v[0] + w[0]) * c[0] / m - g) ) 
     prog.AddLinearEqualityConstraint( c[1] == c[0] + dt * dc[0] ) 
     prog.AddLinearEqualityConstraint( s[1] == s[0] + dt * ds[0] ) 
-    prog.AddConstraint( dc[1] == dc[0] - dt * ( r/I*(v[0]-w[0])*s[0] + dth[0]*ds[0] ) ) 
-    prog.AddConstraint( ds[1] == ds[0] + dt * ( r/I*(v[0]-w[0])*c[0] + dth[0]*dc[0] ) ) 
+    prog.AddConstraint( dc[1] == dc[0] - dt * ( ddth_n*s[0] + dth[0]*ds[0] ) ) 
+    prog.AddConstraint( ds[1] == ds[0] + dt * ( ddth_n*c[0] + dth[0]*dc[0] ) ) 
     # boundary conditions
     z_star = np.hstack( (desired_pos, np.array([0, 0,0,0, 1,0, 0,0]) ))
     u_star = m * g / 2.0 * np.array([1, 1])
@@ -282,25 +276,24 @@ def make_chordal_sdp_program(N, desired_pos = np.array([2,0]), dt = 0.2):
     for i in range(N):
         cost = cost + (z[i]-z_star).dot(Q).dot(z[i]-z_star) + (u[i]-u_star).dot(R).dot(u[i]-u_star)
     prog.AddCost(cost)
+    return state_dim, control_dim, prog, boundary_conditions
+
+def make_chordal_sdp_program(N, desired_pos = np.array([2,0]), dt = 0.2):
+    state_dim, control_dim, prog, boundary_conditions = make_a_1_step_nonconvex_problem(N,desired_pos,dt)
 
     timer = timeit()
-    relaxed_prog, zn, un, psd_mats = make_chordal_sdp_relaxation( horizon, state_dim, control_dim, prog, boundary_conditions)
+    relaxed_prog, zn, un, psd_mats = make_chordal_sdp_relaxation( N, state_dim, control_dim, prog, boundary_conditions)
 
     timer.dt("making the chordal sdp")
     solution = Solve(relaxed_prog)
     timer.dt("solving the chordal sdp")
 
-    print( solution.is_success() )
-    print( solution.get_optimal_cost() )
-    print( solution.get_solution_result() )
+    diditwork(solution)
 
-    res = get_chordal_solution(solution, zn, un, horizon, True)
+    res = get_chordal_solution(solution, zn, un, N, True)
     print("--------")
 
-    # warmstart = make_a_warmstart_from_initial_condition_and_control_sequence(res["v"], res["w"], horizon)
-
-    # solve_nonconvex_birotor(horizon, warmstart=res["full-state"])
-    solve_nonconvex_birotor(horizon, warmstart=res)
+    solve_nonconvex_birotor(N, sdp_warmstart=res)
 
     
 if __name__ == "__main__":
