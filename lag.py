@@ -110,7 +110,7 @@ def langrangian_method(prog:MathematicalProgram, nonc_prog:MathematicalProgram, 
         timer.dt("init_guess, bindings")
 
         # extract solution
-        all_passed = True)
+        all_passed = True
         for (j,a) in constraint_matrices:
             if abs(Y_i[:,j].dot(a)) > eta_i:
                 all_passed = False

@@ -94,10 +94,16 @@ def make_a_nonconvex_birotor_program(N:int, desired_pos:npt.NDArray = np.array([
         ddth_n = (v[n] - w[n]) * r / I - drag * dth[n]
         prog.AddLinearEqualityConstraint( 0 == -dth[n+1] + dth[n]  + dt * ddth_n ) # - dth[n]*dt*drag  )
         # prog.AddLinearEqualityConstraint( dth[n+1] == dth[n]*(1-drag)  + dt * (v[n] - w[n]) * r / I) # - dth[n]*dt*drag  )
+
+        # prog.AddLinearEqualityConstraint( dth[n+1] == dth[n]*(1-drag)  + dt * (v[n] - w[n]) * r / I) # - dth[n]*dt*drag  )
         # prog.AddLinearEqualityConstraint( dth[n+1] == dth[n] + dt * (v[n] - w[n]) * r / I )
+
         # quadratic constraints
         prog.AddConstraint( dx[n+1] == dx[n] + dt * (-(v[n] + w[n]) * s[n] / m) )
         prog.AddConstraint( dy[n+1] == dy[n] + dt * ( (v[n] + w[n]) * c[n] / m - g) )
+        # ddth_n += drag * dth[n]
+
+        ddth_n += drag * dth[n]
 
         prog.AddConstraint( dc[n+1] == dc[n] - dt * ( ddth_n*s[n] + dth[n]*ds[n] ) )
         prog.AddConstraint( ds[n+1] == ds[n] + dt * ( ddth_n*c[n] + dth[n]*dc[n] ) )
@@ -209,14 +215,70 @@ def make_interpolation_init(N, desired_pos:npt.NDArray = np.array([2,0])):
     res["w"] = np.zeros(N)
     return res
 
-def evalaute_square_feasibility_violation(res, N):
+
+
+def evalaute_square_feasibility_violation(res, N, dt = 0.2, Q=None, use_Q = False):
+    if len(res["x"]) != N+1:
+        res["x"] = np.hstack((np.array([0]), res["x"]))
+        res["y"] = np.hstack((np.array([0]), res["y"]))
+        res["th"] = np.hstack((np.array([0]), res["th"]))
+
+        res["dx"] = np.hstack((np.array([0]), res["dx"]))
+        res["dy"] = np.hstack((np.array([0]), res["dy"]))
+        res["dth"] = np.hstack((np.array([0]), res["dth"]))
+
+        res["c"] = np.hstack((np.array([1]), res["c"]))
+        res["s"] = np.hstack((np.array([0]), res["s"]))
+
+        res["dc"] = np.hstack((np.array([0]), res["dc"]))
+        res["ds"] = np.hstack((np.array([0]), res["ds"]))
+
+
+    builder = DiagramBuilder()
+    plant = builder.AddSystem(Quadrotor2D())
+    r = plant.length
+    m = plant.mass
+    I = plant.inertia
+    g = plant.gravity
+
+    x,y,th = res["x"], res["y"], res["th"]
+    dx,dy,dth = res["dx"], res["dy"], res["dth"]
+    c,s,v = res["c"], res["s"], res["v"]
+    dc,ds,w = res["dc"], res["ds"], res["w"]
+    violation = 0
     for n in range(N):
-        
+        violation += (s[n]*ds[n] + c[n]*dc[n])**2
+        violation += (- x[n+1] + x[n] + dt * dx[n] )**2
+        violation += (- y[n+1] + y[n] + dt * dy[n] )**2
+        violation += (-th[n+1] + th[n] + dt * dth[n])**2
+        violation += (-c[n+1] + c[n] + dt * dc[n])**2
+        violation += (-s[n+1] + s[n] + dt * ds[n])**2
+        # use drag dynamics
+        drag = 0.15 / dt
+        ddth_n = (v[n] - w[n]) * r / I - drag * dth[n]
+        violation += (-dth[n+1] + dth[n]  + dt * ddth_n)**2
+        ddth_n += drag * dth[n]
+        # quadratic constraints
+        violation += (-dx[n+1] + dx[n] + dt * (-(v[n] + w[n]) * s[n] / m))**2
+        violation += (-dy[n+1] + dy[n] + dt * ( (v[n] + w[n]) * c[n] / m - g))**2
+        violation += (-dc[n+1] + dc[n] - dt * ( ddth_n*s[n] + dth[n]*ds[n] ))**2
+        violation += (-ds[n+1] + ds[n] + dt * ( ddth_n*c[n] + dth[n]*dc[n] ))**2
+    return violation
 
 
-def solve_nonconvex_birotor(N:int, desired_pos:npt.NDArray = np.array([2,0]), dt:float = 0.2, warmstart = None):
+def get_initial_conditions():
+    sample = []
+    sample.append(np.array([0,2]))
+    sample.append(np.array([2,0]))
+    sample.append(np.array([-2,0]))
+    sample.append(np.array([2,2]))
+    sample.append(np.array([10,10]))
+    return sample
+
+
+def solve_nonconvex_birotor(N:int, desired_pos:npt.NDArray = np.array([2,0]), dt:float = 0.2, warmstart = None, evaluation = False):
     prog, (x,y,th,dx,dy,dth,c,s,dc,ds,v,w) = make_a_nonconvex_birotor_program(N, desired_pos, dt, False, get_vars=True)
-    INFO("Program built.")
+    INFO("Program built.", verbose = not evaluation )
     
     if warmstart is not None:
         res = warmstart
@@ -233,40 +295,66 @@ def solve_nonconvex_birotor(N:int, desired_pos:npt.NDArray = np.array([2,0]), dt
         prog.SetInitialGuess(v, res["v"])
         prog.SetInitialGuess(w, res["w"])
 
-    INFO("Solving ", N)
+    INFO("Solving ", N, verbose = not evaluation )
     timer = timeit()
     solver = SnoptSolver()
     # solver = IpoptSolver()
     solution = solver.Solve(prog)
-    timer.dt()
-    diditwork(solution)
-    
-    if solution.is_success():
-        print(solution.get_optimal_cost())
+    solve_time = timer.dt(verbose=False)
+    if not evaluation:
+        diditwork(solution)  
 
-        INFO( "x", np.round(solution.GetSolution(x[1:]),2) )
-        INFO( "y",  np.round(solution.GetSolution(y[1:]),2) )
-        INFO( "th", np.round(solution.GetSolution(th[1:]),2) )
-        print("---")
-        INFO( "dx", np.round(solution.GetSolution(dx[1:]),2) )
-        INFO( "dy",  np.round(solution.GetSolution(dy[1:]),2) )
-        INFO( "dth", np.round(solution.GetSolution(dth[1:]),2) )
-        print("---")
-        INFO( "c", np.round(solution.GetSolution(c[1:]),2) )
-        INFO( "s",  np.round(solution.GetSolution(s[1:]),2) )
-        print("---")
-        INFO( "dc", np.round(solution.GetSolution(dc[1:]),2) )
-        INFO( "ds",  np.round(solution.GetSolution(ds[1:]),2) )
+    res = dict()
+    res["x"] = np.hstack( ([0], solution.GetSolution(x[1:]) ))
+    res["y"] = np.hstack( ([0], solution.GetSolution(y[1:]) ))
+    res["th"] = np.hstack( ([0], solution.GetSolution(th[1:]) ))
+
+    res["dx"] = np.hstack( ([0], solution.GetSolution(dx[1:]) ))
+    res["dy"] = np.hstack( ([0], solution.GetSolution(dy[1:]) ))
+    res["dth"] = np.hstack( ([0], solution.GetSolution(dth[1:]) ))
+
+    res["c"] = np.hstack( ([1], solution.GetSolution(c[1:]) ))
+    res["s"] = np.hstack( ([0], solution.GetSolution(s[1:]) ))
+    res["dc"] = np.hstack( ([0], solution.GetSolution(dc[1:]) ))
+    res["ds"] = np.hstack( ([0], solution.GetSolution(ds[1:]) ))
+    res["v"] = solution.GetSolution(v)
+    res["w"] = solution.GetSolution(w)
+    
+    if solution.is_success() and not evaluation:
+        INFO(solution.get_optimal_cost())
+        INFO( "x", np.round(solution.GetSolution(x[1:]),2))
+        INFO( "y",  np.round(solution.GetSolution(y[1:]),2))
+        INFO( "th", np.round(solution.GetSolution(th[1:]),2))
+        INFO("---")
+        INFO( "dx", np.round(solution.GetSolution(dx[1:]),2))
+        INFO( "dy",  np.round(solution.GetSolution(dy[1:]),2))
+        INFO( "dth", np.round(solution.GetSolution(dth[1:]),2))
+        INFO("---")
+        INFO( "c", np.round(solution.GetSolution(c[1:]),2))
+        INFO( "s",  np.round(solution.GetSolution(s[1:]),2))
+        INFO("---")
+        INFO( "dc", np.round(solution.GetSolution(dc[1:]),2))
+        INFO( "ds",  np.round(solution.GetSolution(ds[1:]),2))
         cc = np.round(solution.GetSolution(c[1:]),2) ** 2
         ss = np.round(solution.GetSolution(s[1:]),2) ** 2
         INFO( "c2+s2", cc+ss)
-        print("---")
-        INFO( "v", np.round(solution.GetSolution(v),3) )
-        INFO( "w",  np.round(solution.GetSolution(w),3) )
+        INFO("---")
+        INFO( "v", np.round(solution.GetSolution(v),3))
+        INFO( "w",  np.round(solution.GetSolution(w),3))
+
+    if evaluation:
+        violation = evalaute_square_feasibility_violation(res, N, dt)
+        INFO("SNOPT solved:", solution.is_success())
+        INFO("SNOPT time:", solve_time)
+        INFO("SNOPT cost:  ", solution.get_optimal_cost())
+        INFO("SNOPT error: ", violation)
+        INFO("--------")
+        # return solution.is_success(), solve_time, solution.get_optimal_cost(), res
     return prog, solution
 
-if __name__ == "__main__":    
-    solve_nonconvex_birotor(12)
-    print("----")
-    solve_nonconvex_birotor(12, warmstart = make_interpolation_init(12))
+if __name__ == "__main__":
+    desired_pos = np.array([2,0])
+    # desired_pos = np.array([10,10])
+    solve_nonconvex_birotor(12, desired_pos = desired_pos, evaluation=True)
+    solve_nonconvex_birotor(12, desired_pos = desired_pos, warmstart = make_interpolation_init(12), evaluation=True)
     # solve_nonconvex_birotor(16)

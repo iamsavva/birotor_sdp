@@ -256,6 +256,7 @@ def make_a_1_step_nonconvex_problem(N, desired_pos = np.array([2,0]), dt = 0.2):
     drag = 0.15 / dt
     ddth_n = (v[0] - w[0]) * r / I - drag * dth[0]
     prog.AddLinearEqualityConstraint( dth[1] == dth[0] + dt * ddth_n ) # - dth[0]*dt*drag  )
+    
     # prog.AddLinearEqualityConstraint( dth[1] == dth[0]*(1-drag) + dt * (v[0] - w[0]) * r / I) # - dth[0]*dt*drag  )
     # cons.append( prog.AddLinearEqualityConstraint( dth[1] == dth[0] + dt * (v[0] - w[0]) * r / I ) )
     # quadratic dynamics
@@ -293,7 +294,7 @@ def make_chordal_sdp_program(N, desired_pos = np.array([2,0]), dt = 0.2):
     res = get_chordal_solution(solution, zn, un, N, True)
     print("--------")
 
-    solve_nonconvex_birotor(N, sdp_warmstart=res)
+    solve_nonconvex_birotor(N, warmstart=res)
 
     
 if __name__ == "__main__":

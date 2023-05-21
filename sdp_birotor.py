@@ -28,7 +28,7 @@ from pydrake.solvers import MathematicalProgram, Solve
 # from underactuated import ConfigureParser, running_as_notebook
 from underactuated.quadrotor2d import Quadrotor2D, Quadrotor2DVisualizer
 
-from nonlinear_birotor import make_a_nonconvex_birotor_program, solve_nonconvex_birotor
+from nonlinear_birotor import make_a_nonconvex_birotor_program, solve_nonconvex_birotor, evalaute_square_feasibility_violation, make_interpolation_init
 
 def get_solution_from_X(N, X, verbose = False):
     builder = DiagramBuilder()
@@ -36,6 +36,7 @@ def get_solution_from_X(N, X, verbose = False):
     x_vec = np.real(_get_sol_from_svd(X))[1:]
     res = dict()
     N1 = N
+
     res["x"] = x_vec[:N1]
     res["y"] = x_vec[N1:2*N1]
     res["th"] = x_vec[2*N1:3*N1]
@@ -52,6 +53,7 @@ def get_solution_from_X(N, X, verbose = False):
 
     res["v"] = x_vec[10*N1:10*N1+N]
     res["w"] = x_vec[10*N1+N:10*N1+2*N]
+
     if verbose:
         for name in res.keys():
             r = 2
@@ -60,27 +62,38 @@ def get_solution_from_X(N, X, verbose = False):
             YAY( name, np.round(res[name],r) )
     return res
 
-def solve_sdp_birotor(N:int, desired_pos:npt.NDArray = np.array([2,0]), dt:float = 0.2, multiply_equality_constraints = False):
+def solve_sdp_birotor(N:int, desired_pos:npt.NDArray = np.array([2,0]), dt:float = 0.2, multiply_equality_constraints = False, evaluation = False):
     prog = make_a_nonconvex_birotor_program(N, desired_pos, dt, True)
 
     timer = timeit()
     relaxed_prog, X, basis = create_sdp_relaxation(prog, multiply_equality_constraints=multiply_equality_constraints, sample_random_equality_constraints=False, sample_percentage=0.2)
 
-    timer.dt("SDP generation")
+    timer.dt("SDP generation", verbose = not evaluation)
     relaxed_solution = Solve(relaxed_prog)
-    timer.dt("SDP solving")
-    diditwork(relaxed_solution)
+    sdp_solve_time = timer.dt("SDP solving", verbose = not evaluation)
+    if not evaluation:
+        diditwork(relaxed_solution)
     X_val = relaxed_solution.GetSolution(X)
-    eigenvals, _ = np.linalg.eig(X_val)    
-    print("Matrix shape", X_val.shape)
-    print("Matrix rank", np.sum(eigenvals>1e-4))
-    res = get_solution_from_X(N, X_val, verbose=True)
-    print("--------")
+    eigenvals, _ = np.linalg.eig(X_val)
+    INFO("Matrix shape", X_val.shape)
+    INFO("Matrix rank", np.sum(eigenvals>1e-4))
+    res = get_solution_from_X(N, X_val, verbose=not evaluation)
+    
+    INFO("--------", verbose = not evaluation)
 
+    solve_nonconvex_birotor(N, warmstart=res, evaluation=evaluation)
 
-    # solve_nonconvex_birotor(N, sdp_warmstart=res)
+    if evaluation:
+        violation = evalaute_square_feasibility_violation(res, N, dt)
+        INFO("SDP solved:", relaxed_solution.is_success())
+        INFO("SDP time:", sdp_solve_time)
+        INFO("SDP cost:  ", relaxed_solution.get_optimal_cost())
+        INFO("SDP error: ", violation)
+        INFO("--------")
     return X_val, res
 
     
 if __name__ == "__main__":
-    solve_sdp_birotor(12, multiply_equality_constraints=False)
+    N = 10
+    solve_nonconvex_birotor(N, warmstart = make_interpolation_init(N), evaluation=True)
+    solve_sdp_birotor(N, multiply_equality_constraints=True, evaluation=True)
