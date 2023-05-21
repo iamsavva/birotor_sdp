@@ -39,16 +39,16 @@ from sdp import (
 from nonlinear_birotor import make_a_warmstart_from_initial_condition_and_control_sequence, solve_nonconvex_birotor, make_a_nonconvex_birotor_program
 
 
-def make_dumb_init(N, desired_pos, p):
+def make_linear_interpolation_BM_init(N, desired_pos):
     one = np.array([1])
     x = np.linspace(0,desired_pos[0],N)
     y = np.linspace(0,desired_pos[1],N)
-    th = np.zeros(N)
+    th = np.linspace(0,desired_pos[2],N)
     dx = np.zeros(N)
     dy = np.zeros(N)
     dth = np.zeros(N)
-    c = np.ones(N)
-    s = np.zeros(N)
+    c = np.cos(th)
+    s = np.sin(th)
     dc = np.zeros(N)
     ds = np.zeros(N)
     v = np.zeros(N)
@@ -59,20 +59,21 @@ def make_dumb_init(N, desired_pos, p):
     return full_state
 
 def langrangian_method(prog:MathematicalProgram, nonc_prog:MathematicalProgram, X:npt.NDArray, Y:npt.NDArray, Y_opt):
-    cost_expression, cost_matrix, constraint_expressions, constraint_matrices = extract_constraints_from_prog(nonc_prog, X, Y, False)
+    cost_expression, cost_matrix, constraint_expressions, constraint_matrices = extract_constraints_from_prog(nonc_prog, X, Y,False)
+    assert len(constraint_expressions) == len(constraint_matrices)
     constraint_expressions_squared = np.sum(constraint_expressions ** 2)
-    num_constraints = len(constraint_expressions)
+    num_constraints = len(constraint_matrices)
 
     # initial lambdas -- all ones
-    lambda_i = np.ones(len(constraint_expressions))
+    lambda_i = np.ones(num_constraints)
     mu_i = 10
-    eta_i = 1/mu_i**0.1
     omega_i = 1/mu_i
     Y_i = np.ones(Y.shape)
     Y_opt_i = np.ones(Y_opt.shape)
 
-    eta_star = 0.0001 # tolerance
-    omega_star = 0.0001 # prog tolerance
+    gamma = 2
+    eta = 0.75
+    v_k = float("inf")
 
     for i in range(5):
         # form multiplier program
@@ -80,6 +81,7 @@ def langrangian_method(prog:MathematicalProgram, nonc_prog:MathematicalProgram, 
         # for augmented lagrangian
         timer = timeit()
         cost_function = cost_expression - lambda_i.dot(constraint_expressions) + mu_i/2 * constraint_expressions_squared
+        timer.dt("creating cost function")
         cost_binding = prog.AddCost(cost_function)
         # solve the program
         timer.dt("adding cost binding")
@@ -89,9 +91,9 @@ def langrangian_method(prog:MathematicalProgram, nonc_prog:MathematicalProgram, 
         prog.SetSolverOption(solver.solver_id(), "Feasibility tolerance", omega_i)
         prog.SetSolverOption(solver.solver_id(), "Major feasibility tolerance", omega_i)
         prog.SetSolverOption(solver.solver_id(), "Major optimality tolerance", omega_i)
-        prog.SetSolverOption(solver.solver_id(), "Minor feasibility tolerance", omega_i)
-        prog.SetSolverOption(solver.solver_id(), "Minor optimality tolerance", omega_i)
-        prog.SetSolverOption(solver.solver_id(), "Minor optimality tolerance", omega_i)
+
+        # prog.SetSolverOption(solver.solver_id(), "Minor feasibility tolerance", omega_i)
+        # prog.SetSolverOption(solver.solver_id(), "Minor optimality tolerance", omega_i)
         timer.dt("Adding solver otions")
         # solver = IpoptSolver()
         solution = solver.Solve(prog) # type: MathematicalProgramResult # should add initial guess
@@ -110,24 +112,47 @@ def langrangian_method(prog:MathematicalProgram, nonc_prog:MathematicalProgram, 
         timer.dt("init_guess, bindings")
 
         # extract solution
-        all_passed = True
+
+        violation = 0
+        X_i = Y_i @ Y_i.T
         for (j,a) in constraint_matrices:
-            if abs(Y_i[:,j].dot(a)) > eta_i:
-                all_passed = False
-                break
-        if all_passed:
+            if j == "all":
+                violation += (np.sum(a*(X_i)))**2
+            else:
+                violation += (Y_i[:,j].dot(a))**2
+        WARN("violation", violation)
+        
+        if violation <= 0.75 * v_k:
             for i in range(num_constraints):
-                all_passed = True
                 (j,a) = constraint_matrices[i]
-                con = Y_i[:,j].dot(a)
+                if j == "all":
+                    con = np.sum(a*(X_i))
+                else:
+                    con = Y_i[:,j].dot(a)
                 lambda_i[i] = lambda_i[i] - mu_i * con
             mu_i = mu_i
-            eta_i  = eta_i / mu_i**0.9
+            v_k = violation
             omega_i = omega_i / mu_i
         else:
-            mu_i = 5*mu_i
-            eta_i  = 1 / mu_i
+            mu_i = 2 * mu_i
             omega_i = 1 / mu_i
+            # v_k = violation
+            
+    XX = Y_i @ Y_i.T
+    print(XX[0]/XX[0,0]) 
+        # if all_passed:
+        #     for i in range(num_constraints):
+        #         all_passed = True
+        #         (j,a) = constraint_matrices[i]
+        #         con = Y_i[:,j].dot(a)
+        #         lambda_i[i] = lambda_i[i] - mu_i * con
+        #     mu_i = mu_i
+        #     eta_i  = eta_i / mu_i**0.9
+        #     omega_i = omega_i / mu_i
+        # else:
+        #     mu_i = 5*mu_i
+        #     eta_i  = 1 / mu_i
+        #     omega_i = 1 / mu_i
 
         
 
@@ -138,8 +163,8 @@ def langrangian_method(prog:MathematicalProgram, nonc_prog:MathematicalProgram, 
     
 
 
-def make_burer_monteiro_program(N, desired_pos = np.array([2,0]), dt = 0.2):
-    p = 3 # Y will be (num_vars x p)
+def make_burer_monteiro_program(N, desired_pos = np.array([2,0,0]), dt = 0.2):
+    p = 5 # Y will be (num_vars x p)
     
     # construct a nonlinear program without any inequality constraints
     nonc_prog, (x,y,th,dx,dy,dth,c,s,dc,ds,v,w) = make_a_nonconvex_birotor_program(N, desired_pos, dt, for_sdp_solver=True, get_vars=True)
@@ -153,23 +178,31 @@ def make_burer_monteiro_program(N, desired_pos = np.array([2,0]), dt = 0.2):
     Y = np.vstack((bm_prog.NewContinuousVariables(1, p, "Y0"),Y_opt))
     X = Y @ Y.T
     # finite values just in case -- may want to remove that
-    # for c in le(Y, 50):
-    #     bm_prog.AddConstraint(c)
-    # for c in ge(Y, -50):
-    #     bm_prog.AddConstraint(c)
+    for c in le(Y, 100):
+        bm_prog.AddConstraint(c)
+    for c in ge(Y, -100):
+        bm_prog.AddConstraint(c)
     
     # warmstarting -- skip that for now
     if True:
-        X_val, res = solve_sdp_birotor(N, desired_pos, dt)
-        warmstart = X_val[0][1:].reshape(num_vars,1)
+        # X_val, res = solve_sdp_birotor(N, desired_pos, dt)
+        # warmstart = X_val[0][1:].reshape(num_vars,1)
         state_only = N*3
+        warmstart = make_linear_interpolation_BM_init(N, desired_pos)
         for i in range(p):
-            if i == 0:
-                bm_prog.SetInitialGuess( Y[0,i], 0 )
-                bm_prog.SetInitialGuess( Y_opt[:state_only, i], warmstart[:state_only] )
-            else:
-                bm_prog.SetInitialGuess( Y[0,i],0 )
-                bm_prog.SetInitialGuess( Y_opt[:state_only, i], np.ones(state_only) )
+            # bm_prog.SetInitialGuess( Y_opt[:, i], warmstart )
+            bm_prog.SetInitialGuess( Y[:, i], warmstart )
+            
+
+            # if i == 0:
+            #     bm_prog.SetInitialGuess( Y[0,i], 1 )
+            #     bm_prog.SetInitialGuess( Y_opt[:state_only, i], warmstart[:state_only] )
+
+            # else:
+            #     bm_prog.SetInitialGuess( Y[0,i], 1 )
+            #     bm_prog.SetInitialGuess( Y_opt[:state_only, i], np.ones(state_only) )
+
+    
     
     # cost_expressions, constraint_expressions = extract_constraints_from_prog(nonc_prog, X, Y, False)
     # INFO(len(cost_expressions), len(constraint_expressions))

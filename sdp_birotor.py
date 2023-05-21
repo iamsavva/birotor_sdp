@@ -81,7 +81,7 @@ def solve_sdp_birotor(N:int, desired_pos:npt.NDArray = np.array([2,0]), dt:float
     
     INFO("--------", verbose = not evaluation)
 
-    solve_nonconvex_birotor(N, warmstart=res, evaluation=evaluation)
+    solve_nonconvex_birotor(N, desired_pos = desired_pos, warmstart=res, evaluation=evaluation)
 
     if evaluation:
         violation = evalaute_square_feasibility_violation(res, N, dt)
@@ -89,11 +89,13 @@ def solve_sdp_birotor(N:int, desired_pos:npt.NDArray = np.array([2,0]), dt:float
         INFO("SDP time:", sdp_solve_time)
         INFO("SDP cost:  ", relaxed_solution.get_optimal_cost())
         INFO("SDP error: ", violation)
+        print(res["th"])
         INFO("--------")
     return X_val, res
 
     
 if __name__ == "__main__":
-    N = 10
-    solve_nonconvex_birotor(N, warmstart = make_interpolation_init(N), evaluation=True)
-    solve_sdp_birotor(N, multiply_equality_constraints=True, evaluation=True)
+    desired_pos = np.array([2,0, 2*np.pi])
+    N = 20
+    solve_nonconvex_birotor(N, desired_pos = desired_pos, warmstart = make_interpolation_init(N), evaluation=True)
+    solve_sdp_birotor(N, desired_pos = desired_pos, multiply_equality_constraints=False, evaluation=True)

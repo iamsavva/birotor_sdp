@@ -39,39 +39,34 @@ from sdp import (
 from nonlinear_birotor import make_a_warmstart_from_initial_condition_and_control_sequence, solve_nonconvex_birotor, make_a_nonconvex_birotor_program
 
 
-def make_dumb_init(N, desired_pos, p):
-    one = np.array([1])
-    x = np.linspace(0,desired_pos[0],N)
-    y = np.linspace(0,desired_pos[1],N)
-    th = np.zeros(N)
-    dx = np.zeros(N)
-    dy = np.zeros(N)
-    dth = np.zeros(N)
-    c = np.ones(N)
-    s = np.zeros(N)
-    dc = np.zeros(N)
-    ds = np.zeros(N)
-    v = np.zeros(N)
-    w = np.zeros(N)
-    full_state = np.hstack((one, x,y,th,dx,dy,dth,c,s,dc,ds,v,w))
-    n = len(full_state)
-    full_state = full_state.reshape(n,1)
-    return full_state
-    # return np.hstack((full_state, np.zeros((n,p-1))))
-    
+def make_interpolation_init(N, desired_pos:npt.NDArray = np.array([2,0,0])):
+    res = dict()
+    res["x"] = np.linspace(0,desired_pos[0],N)
+    res["y"] = np.linspace(0,desired_pos[1],N)
+    res["th"] = np.linspace(0,desired_pos[2],N)
+    res["dx"] = np.zeros(N)
+    res["dy"] = np.zeros(N)
+    res["dth"] = np.zeros(N)
+    res["c"] = np.cos(res["th"])
+    res["s"] = np.sin(res["th"])
+    res["dc"] = np.zeros(N)
+    res["ds"] = np.zeros(N)
+    res["v"] = np.zeros(N)
+    res["w"] = np.zeros(N)
+    return res
 
 
 
-def make_burer_monteiro_program(N, desired_pos = np.array([2,0]), dt = 0.2):
+def make_burer_monteiro_program(N, desired_pos = np.array([2,0,0]), dt = 0.2):
     # construct a nonlinear program
     prog, (x,y,th,dx,dy,dth,c,s,dc,ds,v,w) = make_a_nonconvex_birotor_program(N, desired_pos, dt, for_sdp_solver=True, get_vars=True)
     decision_vars = np.array( sorted(prog.decision_variables(), key=lambda x: x.get_id()) )
+    # res = make_interpolation_init(N,desired_pos)
     num_vars = ( len(decision_vars))
     
     bm_prog = MathematicalProgram()
 
-    p = 20 # Y is (n x p)
-    # Y = bm_prog.NewContinuousVariables(num_vars, p, "Y")
+    p = 3 # Y is (n x p)
     Y_opt = bm_prog.NewContinuousVariables(num_vars, p, "Y")
     Y = np.vstack((np.ones((1,p)),Y_opt))
     X = Y @ Y.T / p

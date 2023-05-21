@@ -557,6 +557,7 @@ def extract_constraints_from_prog(prog:MathematicalProgram, X:npt.NDArray, Y:npt
 
         for Q in mat_iterator:
             constraint_expressions.append(np.sum(X * Q))
+            constraint_matrices.append( ("all",Q) )
     
         Q_ineqs = [
             _quadratic_polynomial_to_homoenuous_form(p, basis, num_vars)

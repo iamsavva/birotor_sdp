@@ -35,8 +35,8 @@ from sdp import (
     _get_monomial_coeffs, _get_sol_from_svd, _linear_binding_to_expressions, _quadratic_polynomial_to_homoenuous_form, 
     _generic_constraint_bindings_to_polynomials, add_constraints_to_psd_mat_from_prog
 )
-from nonlinear_birotor import make_a_warmstart_from_initial_condition_and_control_sequence, solve_nonconvex_birotor
-
+from nonlinear_birotor import make_a_warmstart_from_initial_condition_and_control_sequence, solve_nonconvex_birotor, DRAG_COEF, evalaute_square_feasibility_violation, make_interpolation_init
+from nonlinear_birotor import Q, Qf, R, thrust_2_mass_ratio
 
 def make_chordal_sdp_relaxation(N:int, state_dim:int, control_dim:int, prog: MathematicalProgram, boundary_conditions:T.Tuple[npt.NDArray, npt.NDArray, npt.NDArray], multiply_equality_constraints:bool = True):
     # ----------------------------------------------------------------------
@@ -197,19 +197,18 @@ def get_chordal_solution(solution, zn, un, horizon, verbose = True):
             YAY( name, np.round(res[name],r) )
     return res
 
-def make_a_1_step_nonconvex_problem(N, desired_pos = np.array([2,0]), dt = 0.2):
+def make_a_1_step_nonconvex_problem(N, desired_pos = np.array([2,0,0]), dt = 0.2):
     builder = DiagramBuilder()
     plant = builder.AddSystem(Quadrotor2D())
     # define constants
-    # thrust_2_mass_ratio = 3 # 3:1 thrust : mass ratio
     r = plant.length
     m = plant.mass
     I = plant.inertia
     g = plant.gravity
 
-    Q = np.diag([10, 10, 10,  1, 1, 20,   1, 1,1,1 ])
-    Qf = Q
-    R = np.array([[0.1, 0.05], [0.05, 0.1]])
+    # Q = np.diag([10, 10, 10,  1, 1, 1,   1, 1,1,1 ])
+    # Qf = Q
+    # R = np.array([[0.1, 0.05], [0.05, 0.1]])
 
     # order in which we define the variables matters -- hence the odd repetition.
     # the logic behind N = 1 is to make chordal matrix gen easier
@@ -248,15 +247,18 @@ def make_a_1_step_nonconvex_problem(N, desired_pos = np.array([2,0]), dt = 0.2):
 
     # dynamics of s^2 + c^2 = 1a
     prog.AddConstraint( s[1]*ds[1] + c[1]*dc[1] == 0)
-    prog.AddConstraint( c[1] <= 1.03)
+    # prog.AddConstraint( v[0] <= )
+    prog.AddBoundingBoxConstraint(0, m*g/2 * thrust_2_mass_ratio, v[0])
+    prog.AddBoundingBoxConstraint(0, m*g/2 * thrust_2_mass_ratio, w[0])
+    # prog.AddConstraint( c[1] <= 1.03)
     # linear dynamics
     prog.AddLinearEqualityConstraint( x[1] == x[0] + dt * dx[0]  ) 
     prog.AddLinearEqualityConstraint( y[1] == y[0] + dt * dy[0] ) 
     prog.AddLinearEqualityConstraint( th[1] == th[0] + dt * dth[0] ) 
-    drag = 0.15 / dt
+    drag = DRAG_COEF / dt
     ddth_n = (v[0] - w[0]) * r / I - drag * dth[0]
     prog.AddLinearEqualityConstraint( dth[1] == dth[0] + dt * ddth_n ) # - dth[0]*dt*drag  )
-    
+
     # prog.AddLinearEqualityConstraint( dth[1] == dth[0]*(1-drag) + dt * (v[0] - w[0]) * r / I) # - dth[0]*dt*drag  )
     # cons.append( prog.AddLinearEqualityConstraint( dth[1] == dth[0] + dt * (v[0] - w[0]) * r / I ) )
     # quadratic dynamics
@@ -267,7 +269,8 @@ def make_a_1_step_nonconvex_problem(N, desired_pos = np.array([2,0]), dt = 0.2):
     prog.AddConstraint( dc[1] == dc[0] - dt * ( ddth_n*s[0] + dth[0]*ds[0] ) ) 
     prog.AddConstraint( ds[1] == ds[0] + dt * ( ddth_n*c[0] + dth[0]*dc[0] ) ) 
     # boundary conditions
-    z_star = np.hstack( (desired_pos, np.array([0, 0,0,0, 1,0, 0,0]) ))
+    th_star = desired_pos[2]
+    z_star = np.hstack( (desired_pos, np.array([0,0,0, np.cos(th_star),np.sin(th_star), 0,0]) ))
     u_star = m * g / 2.0 * np.array([1, 1])
     z_0 = np.array( [0,0,0, 0,0,0, 1,0, 0,0] )
     boundary_conditions = Qf, z_star, z_0 # need for final cost / initial conditions
@@ -279,23 +282,40 @@ def make_a_1_step_nonconvex_problem(N, desired_pos = np.array([2,0]), dt = 0.2):
     prog.AddCost(cost)
     return state_dim, control_dim, prog, boundary_conditions
 
-def make_chordal_sdp_program(N, desired_pos = np.array([2,0]), dt = 0.2):
+def make_chordal_sdp_program(N, desired_pos = np.array([2,0,0]), dt = 0.2, evaluation= False):
     state_dim, control_dim, prog, boundary_conditions = make_a_1_step_nonconvex_problem(N,desired_pos,dt)
 
     timer = timeit()
     relaxed_prog, zn, un, psd_mats = make_chordal_sdp_relaxation( N, state_dim, control_dim, prog, boundary_conditions)
 
-    timer.dt("making the chordal sdp")
+    timer.dt("making the chordal sdp", verbose = not evaluation)
     solution = Solve(relaxed_prog)
-    timer.dt("solving the chordal sdp")
+    CHORDAL_solve_time = timer.dt("solving the chordal sdp", verbose = not evaluation)
 
-    diditwork(solution)
+    if not evaluation:
+        diditwork(solution)
 
-    res = get_chordal_solution(solution, zn, un, N, True)
-    print("--------")
+    res = get_chordal_solution(solution, zn, un, N, verbose= not evaluation)
+    INFO("--------", verbose = not evaluation)
 
-    solve_nonconvex_birotor(N, warmstart=res)
+    solve_nonconvex_birotor(N, dt = dt, desired_pos=desired_pos, warmstart=res, evaluation=evaluation)
+
+    if evaluation:
+        violation = evalaute_square_feasibility_violation(res, N, dt)
+        # INFO("CHORDAL solved:", solution.is_success())
+        # INFO("CHORDAL time:", CHORDAL_solve_time)
+        # INFO("CHORDAL cost:  ", solution.get_optimal_cost())
+        # INFO("CHORDAL error: ", violation)
+        # print("th", res["th"])
+        # print("v", res["v"])
+        # print("w", res["w"])
+        # INFO("--------")
 
     
 if __name__ == "__main__":
-    make_chordal_sdp_program(12)
+    desired_pos = np.array([0,0, 2*np.pi])
+    N = 17
+    dt = 0.1
+    solve_nonconvex_birotor(N, dt=dt,desired_pos = desired_pos, warmstart = make_interpolation_init(N), evaluation=True)
+    make_chordal_sdp_program(N, dt=dt,desired_pos = desired_pos, evaluation=True)
+    # solve_sdp_birotor(N, dt=dt, desired_pos = desired_pos, multiply_equality_constraints=False, evaluation=True)
