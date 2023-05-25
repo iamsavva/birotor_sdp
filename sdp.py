@@ -239,7 +239,7 @@ def create_sdp_relaxation(
             for c in quadratic_costs
         ]
         print("adding quadratic costs:", len(Q_cost))
-        for Q in tqdm(Q_cost):
+        for Q in Q_cost:
             c = np.sum(X * Q)
             relaxed_prog.AddCost(c)
 
@@ -252,15 +252,16 @@ def create_sdp_relaxation(
             prog.linear_equality_constraints(), bounding_box_eqs, decision_vars
         )
         m,_ = A_eq.shape
-        print("adding linear equality constraints:", m)
         j = 0
         if multiply_equality_constraints:
+            print("adding loads of constraints")
             num_cons = num_vars
         else:
             num_cons = 1
 
+        print("adding linear equality constraints:", m*num_cons)
         np.random.seed(1)
-        for a in tqdm(A_eq):
+        for a in A_eq:
             if sample_random_equality_constraints:
                 num_cons = 1
                 options = np.random.choice(num_vars, int(num_vars*sample_percentage))
@@ -268,6 +269,9 @@ def create_sdp_relaxation(
                     j += 1
                     relaxed_prog.AddLinearConstraint(X[i].dot(a) == 0)
 
+            # for i in range(num_cons):
+            #     j += 1
+            #     relaxed_prog.AddLinearConstraint(X[i].dot(a) == 0)
             for i in range(num_cons):
                 j += 1
                 relaxed_prog.AddLinearConstraint(X[i].dot(a) == 0)
@@ -285,12 +289,12 @@ def create_sdp_relaxation(
         print("adding linear inequality constraints:", m)
 
         multiplied_constraints = ge(A_ineq.dot(X).dot(A_ineq.T), 0)
-        for c in tqdm(multiplied_constraints.flatten()):
+        for c in multiplied_constraints.flatten():
             relaxed_prog.AddLinearConstraint(c)
 
         e_1 = unit_vector(0, X.shape[0])
         linear_constraints = ge(A_ineq.dot(X).dot(e_1), 0)
-        for c in tqdm(linear_constraints):
+        for c in linear_constraints:
             relaxed_prog.AddLinearConstraint(c)
 
     has_generic_constaints = len(prog.generic_constraints()) > 0
@@ -315,7 +319,7 @@ def create_sdp_relaxation(
             for p in generic_eq_constraints_as_polynomials
         ]
         print("Quadratic equality constraints", len(Q_eqs))
-        for Q in tqdm(Q_eqs):
+        for Q in Q_eqs:
             constraints = eq( np.sum(X * Q), 0).flatten()
             for c in constraints:  # Drake requires us to add one constraint at the time
                 relaxed_prog.AddLinearConstraint(c)
@@ -324,7 +328,8 @@ def create_sdp_relaxation(
             for p in generic_ineq_constraints_as_polynomials
         ]
         print("Quadratic inequality constraints", len(Q_ineqs))
-        for Q in tqdm(Q_ineqs):
+        for Q in Q_ineqs:
+            # print(np.sum(X * Q))
             constraints = ge(np.sum(X * Q), 0).flatten()
             for c in constraints:  # Drake requires us to add one constraint at the time
                 relaxed_prog.AddLinearConstraint(c)
@@ -356,11 +361,9 @@ def add_constraints_to_psd_mat_from_prog(prog:MathematicalProgram, relaxed_prog:
             _quadratic_cost_binding_to_homogenuous_form(c, basis, num_vars)
             for c in quadratic_costs
         ]
-        mat_iterator = Q_cost
         if verbose:
             print("adding quadratic costs:", len(Q_cost))
-            mat_iterator = tqdm(Q_cost)
-        for Q in mat_iterator:
+        for Q in Q_cost:
             c = np.sum(X * Q)
             relaxed_prog.AddCost(c)
 
@@ -379,11 +382,9 @@ def add_constraints_to_psd_mat_from_prog(prog:MathematicalProgram, relaxed_prog:
         else:
             num_cons = 1
 
-        mat_iterator = A_eq
         if verbose:
             print("adding linear equality constraints:", m)
-            mat_iterator = tqdm(A_eq)
-        for a in mat_iterator:
+        for a in A_eq:
             for i in range(num_cons):
                 j += 1
                 relaxed_prog.AddConstraint(X[i].dot(a) == 0)
@@ -431,12 +432,10 @@ def add_constraints_to_psd_mat_from_prog(prog:MathematicalProgram, relaxed_prog:
             _quadratic_polynomial_to_homoenuous_form(p, basis, num_vars)
             for p in generic_eq_constraints_as_polynomials
         ]
-        mat_iterator = Q_eqs
         if verbose:
             print("adding linear quadratic equality constraints:", len(Q_eqs))
-            mat_iterator = tqdm(Q_eqs)
 
-        for Q in mat_iterator:
+        for Q in Q_eqs:
             constraints = eq( np.sum(X * Q), 0).flatten()
             for c in constraints:  # Drake requires us to add one constraint at the time
                 relaxed_prog.AddConstraint(c)
@@ -445,11 +444,9 @@ def add_constraints_to_psd_mat_from_prog(prog:MathematicalProgram, relaxed_prog:
             _quadratic_polynomial_to_homoenuous_form(p, basis, num_vars)
             for p in generic_ineq_constraints_as_polynomials
         ]
-        mat_iterator = Q_ineqs
         if verbose:
             print("adding linear quadratic equality constraints:", len(Q_ineqs))
-            mat_iterator = tqdm(Q_ineqs)
-        for Q in mat_iterator:
+        for Q in Q_ineqs:
             constraints = ge(np.sum(X * Q), 0).flatten()
             for c in constraints:  # Drake requires us to add one constraint at the time
                 relaxed_prog.AddConstraint(c)
@@ -485,11 +482,9 @@ def extract_constraints_from_prog(prog:MathematicalProgram, X:npt.NDArray, Y:npt
             _quadratic_cost_binding_to_homogenuous_form(c, basis, num_vars)
             for c in quadratic_costs
         ]
-        mat_iterator = Q_cost
         if verbose:
             print("adding quadratic costs:", len(Q_cost))
-            mat_iterator = tqdm(Q_cost)
-        for Q in mat_iterator:
+        for Q in Q_cost:
             cost_expression = np.sum(X * Q)
             cost_matrix = Q
             cost_expressions.append(np.sum(X * Q))
@@ -510,12 +505,10 @@ def extract_constraints_from_prog(prog:MathematicalProgram, X:npt.NDArray, Y:npt
         else:
             num_cons = Y.shape[1]
 
-        mat_iterator = A_eq
         if verbose:
             print("adding linear equality constraints:", m)
-            mat_iterator = tqdm(A_eq)
         
-        for a in mat_iterator:
+        for a in A_eq:
             for i in range(num_cons):
                 j += 1
                 if multiply_equality_constraints:
@@ -550,12 +543,10 @@ def extract_constraints_from_prog(prog:MathematicalProgram, X:npt.NDArray, Y:npt
             _quadratic_polynomial_to_homoenuous_form(p, basis, num_vars)
             for p in generic_eq_constraints_as_polynomials
         ]
-        mat_iterator = Q_eqs
         if verbose:
             print("adding linear quadratic equality constraints:", len(Q_eqs))
-            mat_iterator = tqdm(Q_eqs)
 
-        for Q in mat_iterator:
+        for Q in Q_eqs:
             constraint_expressions.append(np.sum(X * Q))
             constraint_matrices.append( ("all",Q) )
     

@@ -66,22 +66,25 @@ def solve_sdp_birotor(N:int, desired_pos:npt.NDArray = np.array([2,0]), dt:float
     prog = make_a_nonconvex_birotor_program(N, desired_pos, dt, True)
 
     timer = timeit()
-    relaxed_prog, X, basis = create_sdp_relaxation(prog, multiply_equality_constraints=multiply_equality_constraints, sample_random_equality_constraints=False, sample_percentage=0.2)
+    relaxed_prog, X, basis = create_sdp_relaxation(prog, multiply_equality_constraints=multiply_equality_constraints, sample_random_equality_constraints=False, sample_percentage=0.50)
 
-    timer.dt("SDP generation", verbose = not evaluation)
+    timer.dt("SDP generation")
+
+
     relaxed_solution = Solve(relaxed_prog)
-    sdp_solve_time = timer.dt("SDP solving", verbose = not evaluation)
+    sdp_solve_time = timer.dt("SDP solving")
     if not evaluation:
         diditwork(relaxed_solution)
     X_val = relaxed_solution.GetSolution(X)
     eigenvals, _ = np.linalg.eig(X_val)
     INFO("Matrix shape", X_val.shape)
-    INFO("Matrix rank", np.sum(eigenvals>1e-4))
+    INFO("Matrix rank", np.sum(eigenvals>1e-3))
     res = get_solution_from_X(N, X_val, verbose=not evaluation)
     
     INFO("--------", verbose = not evaluation)
 
     solve_nonconvex_birotor(N, desired_pos = desired_pos, warmstart=res, evaluation=evaluation)
+    YAY("-----------")
 
     if evaluation:
         violation = evalaute_square_feasibility_violation(res, N, dt)
@@ -89,13 +92,17 @@ def solve_sdp_birotor(N:int, desired_pos:npt.NDArray = np.array([2,0]), dt:float
         INFO("SDP time:", sdp_solve_time)
         INFO("SDP cost:  ", relaxed_solution.get_optimal_cost())
         INFO("SDP error: ", violation)
-        print(res["th"])
+        print("x", np.round(res["x"],3) )
+        print("y", np.round(res["y"],3))
         INFO("--------")
     return X_val, res
 
     
 if __name__ == "__main__":
-    desired_pos = np.array([2,0, 2*np.pi])
-    N = 20
+    # desired_pos = np.array([2,0, 2*np.pi])
+    # desired_pos = np.array([0,-2, 2*np.pi])
+    desired_pos = np.array([3,3,0])
+    N = 14
     solve_nonconvex_birotor(N, desired_pos = desired_pos, warmstart = make_interpolation_init(N), evaluation=True)
-    solve_sdp_birotor(N, desired_pos = desired_pos, multiply_equality_constraints=False, evaluation=True)
+    YAY("-----------")
+    solve_sdp_birotor(N, desired_pos = desired_pos, multiply_equality_constraints=True, evaluation=True)

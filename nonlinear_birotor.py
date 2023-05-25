@@ -28,10 +28,10 @@ from pydrake.solvers import MathematicalProgram, Solve
 from underactuated.quadrotor2d import Quadrotor2D, Quadrotor2DVisualizer
 
 DRAG_COEF = 0.0
-Q = np.diag([1, 1, 30,  1, 1, 1,   1, 1,1,1 ])
+Q = np.diag([10, 10, 1,  1, 1, 1,   1, 1,1,1 ])
 Qf = Q
 R = np.array([[0.1, 0.05], [0.05, 0.1]])
-thrust_2_mass_ratio = 3 # 3:1 thrust : mass ratio
+thrust_2_mass_ratio = 1.5 # 3:1 thrust : mass ratio
 
 def add_ellipsoid_constraint(prog, vars, center, radii, t_rot):
     B = np.array([[np.cos(t_rot) , -np.sin(t_rot)],[np.sin(t_rot), np.cos(t_rot)]])  
@@ -43,24 +43,20 @@ def add_ellipsoid_constraint(prog, vars, center, radii, t_rot):
     G = A.T @ A
     vars = np.array(vars)
     center = np.array(center)
-    print( ((vars - center).T @ G @ (vars-center)).shape )
-    # prog.AddConstraint()
-    # return (vars - center).T @ G @ (vars-center) >= 1
+    # print( ((vars - center).T @ G @ (vars-center)) )
+    # print((vars - center).T @ G @ (vars-center) - 1)
+    prog.AddConstraint( (vars - center).T @ G @ (vars-center) >= 1 )
 
 
 def make_a_nonconvex_birotor_program(N:int, desired_pos:npt.NDArray = np.array([2,0,0]), dt:float = 0.2, for_sdp_solver:bool = False, get_vars = False):
     builder = DiagramBuilder()
     plant = builder.AddSystem(Quadrotor2D())
     # define constants
-    thrust_2_mass_ratio = 3 # 3:1 thrust : mass ratio
+    # thrust_2_mass_ratio = 3 # 3:1 thrust : mass ratio
     r = plant.length
     m = plant.mass
     I = plant.inertia
     g = plant.gravity
-
-    # Q = np.diag([10, 10, 10,  1, 1, 1,   1, 1,1,1 ])
-    # Qf = Q
-    # R = np.array([[0.1, 0.05], [0.05, 0.1]])
 
     prog = MathematicalProgram()
     # generate state optimization variables
@@ -83,26 +79,37 @@ def make_a_nonconvex_birotor_program(N:int, desired_pos:npt.NDArray = np.array([
 
     # "dynamics" of cos^2 + sin^2 = 1
     for n in range(1, N+1):
+        # t = prog.NewContinuousVariables(1, "t" + str(n))[0]
         prog.AddConstraint( s[n]*ds[n] + c[n]*dc[n] == 0)
 
-    add_ellipsoid_constraint(prog, [x[1],y[1]], [-1,1], [1.5,0.15], np.pi/4)
+        # outside of first ellipse
+        # add_ellipsoid_constraint(prog, [x[n],y[n]], [-1,1], [1.5,0.5], np.pi/4)
+        # # outside of second ellipse
+        # add_ellipsoid_constraint(prog, [x[n],y[n]], [0.5,1.5], [0.8, 0.5], -np.pi/4)
+        # add_ellipsoid_constraint(prog, [x[n],y[n]], [0,1.5], [1.5, 1], 0)
+        
+        add_ellipsoid_constraint(prog, [x[n],y[n]], [1,  1.5], [1.5,0.5], 0)
+        add_ellipsoid_constraint(prog, [x[n],y[n]], [1.5, 1], [0.5,1.5], 0)
+        if n != 1:
+            add_ellipsoid_constraint(prog, [x[n-1] + dt * dx[n-1], y[n-1] + dt * dy[n-1]], [1,  1.5], [1.5,0.5], 0)
+            add_ellipsoid_constraint(prog, [x[n-1] + dt * dx[n-1], y[n-1] + dt * dy[n-1]], [1.5,  1], [0.5,1.5], 0)
 
     # add bounding constraints -- nonconvex solver needs them else it swears
     if not for_sdp_solver:
-        prog.AddBoundingBoxConstraint(-10*np.ones(N),  10*np.ones(N),  x[1:])
-        prog.AddBoundingBoxConstraint(-10*np.ones(N),  10*np.ones(N),  y[1:])
-        prog.AddBoundingBoxConstraint( -3*np.pi*np.ones(N),  3*np.pi*np.ones(N),  th[1:])
-        prog.AddBoundingBoxConstraint( -20*np.ones(N),  20*np.ones(N),  dx[1:])
-        prog.AddBoundingBoxConstraint( -20*np.ones(N),  20*np.ones(N),  dy[1:])
-        prog.AddBoundingBoxConstraint( -3*np.pi*np.ones(N),  3*np.pi*np.ones(N),  dth[1:])
+        prog.AddBoundingBoxConstraint(-5*np.ones(N),  5*np.ones(N),  x[1:])
+        prog.AddBoundingBoxConstraint(-5*np.ones(N),  5*np.ones(N),  y[1:])
+        prog.AddBoundingBoxConstraint( -1*np.pi*np.ones(N),  1*np.pi*np.ones(N),  th[1:])
+        prog.AddBoundingBoxConstraint( -5*np.ones(N),  5*np.ones(N),  dx[1:])
+        prog.AddBoundingBoxConstraint( -5*np.ones(N),  5*np.ones(N),  dy[1:])
+        prog.AddBoundingBoxConstraint( -1*np.pi*np.ones(N),  1*np.pi*np.ones(N),  dth[1:])
 
-        prog.AddBoundingBoxConstraint(-1.2*np.ones(N),  1.2*np.ones(N),  c[1:])
-        prog.AddBoundingBoxConstraint(-1.2*np.ones(N),  1.2*np.ones(N),  s[1:])
-        prog.AddBoundingBoxConstraint(-3*np.ones(N),  3*np.ones(N),  dc[1:])
-        prog.AddBoundingBoxConstraint(-3*np.ones(N),  3*np.ones(N),  ds[1:])
+        prog.AddBoundingBoxConstraint(-1.03*np.ones(N),  1.03*np.ones(N),  c[1:])
+        prog.AddBoundingBoxConstraint(-1.03*np.ones(N),  1.03*np.ones(N),  s[1:])
+        prog.AddBoundingBoxConstraint(-1*np.ones(N),  1*np.ones(N),  dc[1:])
+        prog.AddBoundingBoxConstraint(-1*np.ones(N),  1*np.ones(N),  ds[1:])
         # lower and upper bounds on control inputs
-        prog.AddBoundingBoxConstraint(0, m*g/2 * thrust_2_mass_ratio, v)
-        prog.AddBoundingBoxConstraint(0, m*g/2 * thrust_2_mass_ratio, w)
+    prog.AddBoundingBoxConstraint(0, m*g/2 * thrust_2_mass_ratio, v)
+    prog.AddBoundingBoxConstraint(0, m*g/2 * thrust_2_mass_ratio, w)
 
     # dynamics
     for n in range(N):
@@ -116,10 +123,6 @@ def make_a_nonconvex_birotor_program(N:int, desired_pos:npt.NDArray = np.array([
         drag = DRAG_COEF / dt
         ddth_n = (v[n] - w[n]) * r / I - drag * dth[n]
         prog.AddLinearEqualityConstraint( 0 == -dth[n+1] + dth[n]  + dt * ddth_n ) # - dth[n]*dt*drag  )
-        # prog.AddLinearEqualityConstraint( dth[n+1] == dth[n]*(1-drag)  + dt * (v[n] - w[n]) * r / I) # - dth[n]*dt*drag  )
-
-        # prog.AddLinearEqualityConstraint( dth[n+1] == dth[n]*(1-drag)  + dt * (v[n] - w[n]) * r / I) # - dth[n]*dt*drag  )
-        # prog.AddLinearEqualityConstraint( dth[n+1] == dth[n] + dt * (v[n] - w[n]) * r / I )
 
         # quadratic constraints
         prog.AddConstraint( dx[n+1] == dx[n] + dt * (-(v[n] + w[n]) * s[n] / m) )
@@ -128,14 +131,12 @@ def make_a_nonconvex_birotor_program(N:int, desired_pos:npt.NDArray = np.array([
         # ddth_n += drag * dth[n]
         prog.AddConstraint( dc[n+1] == dc[n] - dt * ( ddth_n*s[n] + dth[n]*ds[n] ) )
         prog.AddConstraint( ds[n+1] == ds[n] + dt * ( ddth_n*c[n] + dth[n]*dc[n] ) )
-        
-        # prog.AddConstraint( dc[n+1] == dc[n] - dt * ( r/I*(v[n]-w[n])*s[n] + dth[n]*ds[n] ) )
-        # prog.AddConstraint( ds[n+1] == ds[n] + dt * ( r/I*(v[n]-w[n])*c[n] + dth[n]*dc[n] ) )
+
 
 
     # desired point
     th_star = desired_pos[2]
-    z_star = np.hstack( (desired_pos, np.array([0,0,0, np.cos(th_star),np.sin(th_star), 0,0]) ))
+    z_star = np.hstack( (desired_pos, np.array([0,0,0, 1,0, 0,0]) ))
     u_star = m * g / 2.0 * np.array([1, 1])
 
     # build quadratic cost
@@ -146,10 +147,9 @@ def make_a_nonconvex_birotor_program(N:int, desired_pos:npt.NDArray = np.array([
     # add final cost
     cost += (z[N]-z_star).dot(Qf).dot(z[N]-z_star)
 
-    # for i in range(3):
-    # prog.AddLinearConstraint( z[N][2] >= z_star[2]-0.5 )
-    # prog.AddLinearConstraint( z[N][2] <= z_star[2]+0.5 )
-
+    prog.AddLinearConstraint(z[N][0] == desired_pos[0])
+    prog.AddLinearConstraint(z[N][1] == desired_pos[1])
+    prog.AddLinearConstraint(z[N][2] == desired_pos[2])
 
     prog.AddCost(cost)
 
@@ -245,7 +245,6 @@ def make_interpolation_init(N, desired_pos:npt.NDArray = np.array([2,0,0])):
     return res
 
 
-
 def evalaute_square_feasibility_violation(res, N, dt = 0.2, Q=None, use_Q = False):
     if len(res["x"]) != N+1:
         res["x"] = np.hstack((np.array([0]), res["x"]))
@@ -314,21 +313,25 @@ def solve_nonconvex_birotor(N:int, desired_pos:npt.NDArray = np.array([2,0, 0]),
         prog.SetInitialGuess(x[1:], res["x"])
         prog.SetInitialGuess(y[1:], res["y"])
         prog.SetInitialGuess(th[1:], res["th"])
-        prog.SetInitialGuess(dx[1:], res["dx"])
-        prog.SetInitialGuess(dy[1:], res["dy"])
-        prog.SetInitialGuess(dth[1:], res["dth"])
+        # prog.SetInitialGuess(dx[1:], res["dx"])
+        # prog.SetInitialGuess(dy[1:], res["dy"])
+        # prog.SetInitialGuess(dth[1:], res["dth"])
         prog.SetInitialGuess(c[1:], res["c"])
         prog.SetInitialGuess(s[1:], res["s"])
-        prog.SetInitialGuess(dc[1:], res["dc"])
-        prog.SetInitialGuess(ds[1:], res["ds"])
-        prog.SetInitialGuess(v, res["v"])
-        prog.SetInitialGuess(w, res["w"])
+        # prog.SetInitialGuess(dc[1:], res["dc"])
+        # prog.SetInitialGuess(ds[1:], res["ds"])
+        # prog.SetInitialGuess(v, res["v"])
+        # prog.SetInitialGuess(w, res["w"])
 
     INFO("Solving ", N, verbose = not evaluation )
     timer = timeit()
-    # solver = SnoptSolver()
-    solver = IpoptSolver()
+    solver = SnoptSolver()
+    # solver = IpoptSolver()
     # prog.SetSolverOption(IpoptSolver.id(), "Major iterations limit", 10000)
+    prog.SetSolverOption(SnoptSolver.id(), "Major iterations limit", 10000)
+    prog.SetSolverOption(solver.solver_id(), "Feasibility tolerance", 0.00001)
+    # prog.SetSolverOption(solver.solver_id(), "Major feasibility tolerance", omega_i)
+    # prog.SetSolverOption(solver.solver_id(), "Major optimality tolerance", omega_i)
     solution = solver.Solve(prog)
     solve_time = timer.dt(verbose=False)
     if not evaluation:
@@ -350,27 +353,28 @@ def solve_nonconvex_birotor(N:int, desired_pos:npt.NDArray = np.array([2,0, 0]),
     res["v"] = solution.GetSolution(v)
     res["w"] = solution.GetSolution(w)
     
-    if solution.is_success() and not evaluation:
+    # if solution.is_success() and not evaluation:
+    if solution.is_success():
         INFO(solution.get_optimal_cost())
         INFO( "x", np.round(solution.GetSolution(x[1:]),2))
         INFO( "y",  np.round(solution.GetSolution(y[1:]),2))
         INFO( "th", np.round(solution.GetSolution(th[1:]),2))
-        INFO("---")
-        INFO( "dx", np.round(solution.GetSolution(dx[1:]),2))
-        INFO( "dy",  np.round(solution.GetSolution(dy[1:]),2))
-        INFO( "dth", np.round(solution.GetSolution(dth[1:]),2))
-        INFO("---")
-        INFO( "c", np.round(solution.GetSolution(c[1:]),2))
-        INFO( "s",  np.round(solution.GetSolution(s[1:]),2))
-        INFO("---")
-        INFO( "dc", np.round(solution.GetSolution(dc[1:]),2))
-        INFO( "ds",  np.round(solution.GetSolution(ds[1:]),2))
-        cc = np.round(solution.GetSolution(c[1:]),2) ** 2
-        ss = np.round(solution.GetSolution(s[1:]),2) ** 2
-        INFO( "c2+s2", cc+ss)
-        INFO("---")
-        INFO( "v", np.round(solution.GetSolution(v),3))
-        INFO( "w",  np.round(solution.GetSolution(w),3))
+        # INFO("---")
+        # INFO( "dx", np.round(solution.GetSolution(dx[1:]),2))
+        # INFO( "dy",  np.round(solution.GetSolution(dy[1:]),2))
+        # INFO( "dth", np.round(solution.GetSolution(dth[1:]),2))
+        # INFO("---")
+        # INFO( "c", np.round(solution.GetSolution(c[1:]),2))
+        # INFO( "s",  np.round(solution.GetSolution(s[1:]),2))
+        # INFO("---")
+        # INFO( "dc", np.round(solution.GetSolution(dc[1:]),2))
+        # INFO( "ds",  np.round(solution.GetSolution(ds[1:]),2))
+        # cc = np.round(solution.GetSolution(c[1:]),2) ** 2
+        # ss = np.round(solution.GetSolution(s[1:]),2) ** 2
+        # INFO( "c2+s2", cc+ss)
+        # INFO("---")
+        # INFO( "v", np.round(solution.GetSolution(v),3))
+        # INFO( "w",  np.round(solution.GetSolution(w),3))
 
     if evaluation:
         violation = evalaute_square_feasibility_violation(res, N, dt)
@@ -378,15 +382,20 @@ def solve_nonconvex_birotor(N:int, desired_pos:npt.NDArray = np.array([2,0, 0]),
         INFO("SNOPT time:", solve_time)
         INFO("SNOPT cost:  ", solution.get_optimal_cost())
         INFO("SNOPT error: ", violation)
-        print(res["th"])
+        print("SNOPT: x", np.round(res["x"],3) )
+        print("SNOPT: y", np.round(res["y"],3))
+        print("SNOPT: dx", np.round(res["dx"],3) )
+        print("SNOPT: dy", np.round(res["dy"],3))
         INFO("--------")
         # return solution.is_success(), solve_time, solution.get_optimal_cost(), res
     return prog, solution
 
 if __name__ == "__main__":
-    desired_pos = np.array([2,0, 2*np.pi])
-    desired_pos = np.array([2,0, 0])
+    N = 20
+    # desired_pos = np.array([0, 0, 2*np.pi])
+    desired_pos = np.array([3, 3, 0])
+    # desired_pos = np.array([2, 0, 0])
     # desired_pos = np.array([10,10])
     # solve_nonconvex_birotor(12, desired_pos = desired_pos, evaluation=True)
-    solve_nonconvex_birotor(12, desired_pos = desired_pos, warmstart = make_interpolation_init(12), evaluation=True)
+    solve_nonconvex_birotor(N, desired_pos = desired_pos, warmstart = make_interpolation_init(N), evaluation=True)
     # solve_nonconvex_birotor(16)
